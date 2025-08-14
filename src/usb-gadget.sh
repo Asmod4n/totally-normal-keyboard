@@ -1,26 +1,85 @@
 #!/bin/bash
-# Setup or teardown USB CDC-NCM + HID + Mass Storage gadget
 set -e
 
 GADGET=/sys/kernel/config/usb_gadget/tnk
 
+calc_report_length() {
+    local hidraw="$1"
+    if [ -z "$hidraw" ]; then
+        echo "Usage: calc_report_length <hidraw report descriptor file>" >&2
+        return 1
+    fi
+
+    python3 - "$hidraw" <<'EOF'
+import sys, math
+
+hidraw_path = sys.argv[1]
+data = open(hidraw_path, "rb").read()
+
+i = 0
+rep_size_bits = rep_count = 0
+current_id = 0
+has_ids = False
+max_bytes = 0
+cur_bits = 0
+
+def flush():
+    global cur_bits, max_bytes, current_id, has_ids
+    if cur_bits:
+        length = math.ceil(cur_bits / 8)
+        if current_id != 0 or has_ids:
+            length += 1
+        max_bytes = max(max_bytes, length)
+
+while i < len(data):
+    b = data[i]; i += 1
+    if b == 0xFE:  # long item
+        if i+2 > len(data): break
+        size = data[i]; i += 2 + size
+        continue
+    size_code = b & 0x03
+    size = [0,1,2,4][size_code]
+    typ = (b >> 2) & 0x03
+    tag = (b >> 4) & 0x0F
+    payload = data[i:i+size]; i += size
+    val = int.from_bytes(payload, "little") if size else 0
+
+    if typ == 1:  # Global
+        if tag == 0x07: rep_size_bits = val
+        elif tag == 0x09: rep_count = val
+        elif tag == 0x08:
+            flush()
+            current_id = val
+            has_ids = True
+            cur_bits = 0
+    elif typ == 0 and tag == 0x08:  # Input
+        cur_bits += rep_size_bits * rep_count
+
+flush()
+if max_bytes == 0: max_bytes = 8
+print(max_bytes)
+EOF
+}
+
+
 do_start() {
-  # Already started? UDC must contain a non-whitespace controller name.
+  # Schon gestartet?
   if [ -f "$GADGET/UDC" ]; then
     local udc
     IFS= read -r udc < "$GADGET/UDC" || true
     if [ -n "${udc//[[:space:]]/}" ]; then
-      echo "✅ Gadget already started (UDC=${udc}). Nothing to do."
+      echo "✅ Gadget already started (UDC=${udc})."
       exit 0
     fi
   fi
+
   modprobe libcomposite
   mkdir -p "$GADGET"
   cd "$GADGET"
 
-  # Basic descriptor
-  echo 0x1d6b > idVendor       # Linux Foundation
-  echo 0x0104 > idProduct      # Composite Device
+  # Basis-Deskriptor
+  echo 0x1d6b > idVendor
+  echo 0x0104 > idProduct
   echo 0x0100 > bcdDevice
   echo 0x0200 > bcdUSB
 
@@ -30,7 +89,7 @@ do_start() {
   echo "Hendrik" > strings/0x409/manufacturer
   echo "CDC-NCM Gadget" > strings/0x409/product
 
-  # Configuration
+  # Konfiguration
   mkdir -p configs/c.1/strings/0x409
   echo "CDC-NCM" > configs/c.1/strings/0x409/configuration
   echo 250 > configs/c.1/MaxPower
@@ -39,7 +98,7 @@ do_start() {
   mkdir -p functions/mass_storage.usb0
   mkdir -p /piusb
   if [ ! -f /piusb/disk.img ]; then
-    echo "📦 Creating disk.img (128MB FAT32)..."
+    echo "📦 Creating disk.img..."
     dd if=/dev/zero of=/piusb/disk.img bs=1M count=128
     mkfs.vfat /piusb/disk.img
   else
@@ -50,64 +109,33 @@ do_start() {
   echo 1 > functions/mass_storage.usb0/lun.0/removable
   ln -s functions/mass_storage.usb0 configs/c.1/
 
-  # CDC-NCM networking
+  # CDC-NCM Netzwerk
   mkdir -p functions/ncm.usb0
   echo "02:12:34:56:78:90" > functions/ncm.usb0/dev_addr
   echo "02:98:76:54:32:10" > functions/ncm.usb0/host_addr
   ln -s functions/ncm.usb0 configs/c.1/
 
-  # HID keyboard
-  mkdir -p functions/hid.usb0
-  echo 1 > functions/hid.usb0/protocol
-  echo 1 > functions/hid.usb0/subclass
-  echo 8 > functions/hid.usb0/report_length
+  # Dynamische HID-Funktionen
+  echo "🧠 Scanning for HID report descriptors..."
+  hid_index=0
+  for hidraw in /sys/class/hidraw/hidraw*/device/report_descriptor; do
+    if [ -r "$hidraw" ]; then
+      length=$(calc_report_length "$hidraw")
+      echo "🔧 Adding HID function $hid_index (report_length=$length)..."
+      mkdir -p "functions/hid.usb${hid_index}"
+      echo 0 > "functions/hid.usb${hid_index}/protocol"
+      echo 0 > "functions/hid.usb${hid_index}/subclass"
+      echo "$length" > "functions/hid.usb${hid_index}/report_length"
+      cat "$hidraw" > "functions/hid.usb${hid_index}/report_desc"
+      ln -s "functions/hid.usb${hid_index}" configs/c.1/
+      hid_index=$((hid_index + 1))
+    fi
+  done
 
-  # 🧠 Define HID (Human Interface Device) Report Descriptor for a USB Keyboard
-  # This descriptor outlines the keyboard's data format for the host system.
-
-  REPORT_DESC="\x05\x01"        # Usage Page (Generic Desktop)
-  REPORT_DESC+="\x09\x06"       # Usage (Keyboard)
-  REPORT_DESC+="\xa1\x01"       # Collection (Application)
-  REPORT_DESC+="\x05\x07"       # Usage Page (Key Codes)
-  REPORT_DESC+="\x19\xe0"       # Usage Minimum (Left Control)
-  REPORT_DESC+="\x29\xe7"       # Usage Maximum (Right GUI)
-  REPORT_DESC+="\x15\x00"       # Logical Minimum (0)
-  REPORT_DESC+="\x25\x01"       # Logical Maximum (1)
-  REPORT_DESC+="\x75\x01"       # Report Size (1 bit)
-  REPORT_DESC+="\x95\x08"       # Report Count (8 bits for modifier keys)
-  REPORT_DESC+="\x81\x02"       # Input (Data, Variable, Absolute)
-  REPORT_DESC+="\x95\x01"       # Report Count (1)
-  REPORT_DESC+="\x75\x08"       # Report Size (8 bits reserved byte)
-  REPORT_DESC+="\x81\x01"       # Input (Constant)
-  REPORT_DESC+="\x95\x05"       # Report Count (5 bits LED output)
-  REPORT_DESC+="\x75\x01"       # Report Size (1 bit per LED)
-  REPORT_DESC+="\x05\x08"       # Usage Page (LEDs)
-  REPORT_DESC+="\x19\x01"       # Usage Minimum (Num Lock)
-  REPORT_DESC+="\x29\x05"       # Usage Maximum (Kana)
-  REPORT_DESC+="\x91\x02"       # Output (Data, Variable, Absolute)
-  REPORT_DESC+="\x95\x01"       # Report Count (1)
-  REPORT_DESC+="\x75\x03"       # Report Size (3 bits padding)
-  REPORT_DESC+="\x91\x01"       # Output (Constant)
-  REPORT_DESC+="\x95\x06"       # Report Count (6 keys)
-  REPORT_DESC+="\x75\x08"       # Report Size (8 bits per key)
-  REPORT_DESC+="\x15\x00"       # Logical Minimum (0)
-  REPORT_DESC+="\x25\x65"       # Logical Maximum (101 keys)
-  REPORT_DESC+="\x05\x07"       # Usage Page (Key Codes)
-  REPORT_DESC+="\x19\x00"       # Usage Minimum (0)
-  REPORT_DESC+="\x29\x65"       # Usage Maximum (101)
-  REPORT_DESC+="\x81\x00"       # Input (Data, Array)
-  REPORT_DESC+="\xc0"           # End Collection
-
-  # 📝 Write the keyboard HID descriptor to the gadget function
-  echo -ne "$REPORT_DESC" > functions/hid.usb0/report_desc
-
-  # 🔗 Link the HID function into the gadget configuration
-  ln -s functions/hid.usb0 configs/c.1/
-
-  # Bind to UDC
+  # An Controller binden
   echo "$(ls /sys/class/udc)" > UDC
 
-  # Network up
+  # Netzwerk hochfahren
   sleep 2
   ip link set usb0 up || ifconfig usb0 up
   ip -6 addr add fe80::1 dev usb0
@@ -115,11 +143,8 @@ do_start() {
 
 do_stop() {
   echo "🛑 Cleaning up USB gadget tnk..."
-
-  # Step 1: Unbind from UDC
   if [ -f "$GADGET/UDC" ]; then
-    echo "" > "$GADGET/UDC" 2>/dev/null || echo "⚠️ UDC already unbound or not present"
-    echo "🔌 UDC unbound."
+    echo "" > "$GADGET/UDC" 2>/dev/null || echo "⚠️ UDC already unbound"
     sleep 1
   fi
 
@@ -128,40 +153,27 @@ do_stop() {
     return 1
   }
 
-  # Step 2: Remove function symlinks from configuration
   echo "🧹 Removing config symlinks..."
-  rm -v configs/c.1/ncm.usb0
-  rm -v configs/c.1/hid.usb0
-  rm -v configs/c.1/mass_storage.usb0
+  for link in configs/c.1/*; do
+    [ -L "$link" ] && rm -v "$link"
+  done
 
-  # Step 3: Remove config string directories
-  echo "🧹 Removing configuration strings..."
-  rmdir -v configs/c.1/strings/0x409
+  rmdir -v configs/c.1/strings/0x409 2>/dev/null || true
+  rmdir -v configs/c.1 2>/dev/null || true
 
-  # Step 4: Remove configuration itself
-  rmdir -v configs/c.1
-
-  # Step 5: Remove function directories
   echo "🧹 Removing functions..."
-  rmdir -v functions/ncm.usb0
-  rmdir -v functions/hid.usb0
-  rmdir -v functions/mass_storage.usb0
+  for func in functions/*; do
+    rmdir -v "$func" 2>/dev/null || true
+  done
 
-  # Step 6: Remove gadget-level strings
-  rmdir -v strings/0x409
-
-  # Step 8: Remove gadget directory
+  rmdir -v strings/0x409 2>/dev/null || true
   cd ..
-  rmdir -v tnk && echo "✅ Gadget tnk removed completely."
+  rmdir -v tnk && echo "✅ Gadget tnk removed."
 }
 
-# Entry point
 case "$1" in
   start) do_start ;;
-  stop)  do_stop ;;
+  stop) do_stop ;;
   restart) do_stop; sleep 1; do_start ;;
-  *)
-    echo "Usage: $0 {start|stop|restart}"
-    exit 1
-    ;;
+  *) echo "Usage: $0 {start|stop|restart}"; exit 1 ;;
 esac
