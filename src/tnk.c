@@ -1,0 +1,39 @@
+#include <mruby.h>
+#include <mruby/error.h>
+#include <linux/input.h>  // For EVIOCGRAB
+#include <unistd.h>       // For usleep
+#include <sys/ioctl.h>    // For ioctl()
+
+static mrb_value grab(mrb_state *mrb, mrb_value self)
+{
+    mrb_int fd;
+    mrb_get_args(mrb, "i", &fd);
+    ioctl(fd, EVIOCGRAB, 0);
+    usleep(5000);
+    if (ioctl(fd, EVIOCGRAB, 1) < 0) {
+        mrb_sys_fail(mrb, "ioctl(EVIOCGRAB, 1)");
+    }
+
+    return self;
+}
+
+static mrb_value ungrab(mrb_state *mrb, mrb_value self)
+{
+    mrb_int fd;
+    mrb_get_args(mrb, "i", &fd);
+    if (ioctl(fd, EVIOCGRAB, 0) < 0) {
+        mrb_sys_fail(mrb, "ioctl(EVIOCGRAB, 0)");
+    }
+
+    return self;
+}
+
+void mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
+{
+    struct RClass *tnk = mrb_define_class(mrb, "Tnk", mrb->object_class);
+
+    mrb_define_module_function(mrb, tnk, "grab", grab, MRB_ARGS_REQ(1));
+    mrb_define_module_function(mrb, tnk, "ungrab", ungrab, MRB_ARGS_REQ(1));
+}
+
+void mrb_totally_normal_keyboard_gem_final(mrb_state *mrb) {}

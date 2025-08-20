@@ -1,0 +1,27 @@
+---
+mruby:
+  version: 3.4.0
+  release_no: 30400
+  git_commit: fafb52d72a2c09b6979c32ea5b97ce6f1af6a53d
+builds:
+  host:
+    https://github.com/Asmod4n/mruby-io_uring.git:
+      url: https://github.com/Asmod4n/mruby-io_uring.git
+      branch: main
+      commit: bfb8615c82c635217a31a87eb4061defb12260ef
+      version: 0.10.0
+    https://github.com/Asmod4n/mruby-c-ext-helpers.git:
+      url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
+      branch: master
+      commit: 9ba48a5a60e4f66ea7e94a7ca8c3f7e335ededac
+      version: 0.0.0
+    https://github.com/iij/mruby-process.git:
+      url: https://github.com/iij/mruby-process.git
+      branch: master
+      commit: 95da206a5764f4e80146979b8e35bd7a9afd6850
+      version: 0.0.0
+    https://github.com/ksss/mruby-signal.git:
+      url: https://github.com/ksss/mruby-signal.git
+      branch: master
+      commit: 5101901ade09c98a21aa8ee59dc09749f54a1d80
+      version: 0.0.0
