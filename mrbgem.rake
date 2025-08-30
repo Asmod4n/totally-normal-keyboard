@@ -2,8 +2,12 @@ MRuby::Gem::Specification.new('totally-normal-keyboard') do |spec|
   spec.license = 'AGPL-3.0'
   spec.authors = 'Hendrik Beskow'
   spec.add_dependency 'mruby-io-uring'
+  spec.add_dependency 'mruby-pack'
   spec.add_dependency 'mruby-signal'
-  spec.cxx.flags << '-std=c++20'
+  spec.add_dependency 'mruby-time'
+
+  sh File.join(__dir__, 'scripts', 'gen_keymap.sh')
+  sh File.join(__dir__, 'scripts', 'gen.rb')
 
   spec.bins = %w(tnk)
 end

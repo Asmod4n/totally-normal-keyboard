@@ -1,14 +1,8 @@
 class Tnk
   module Hidraw
-    # hidraw_event_resolution.rb
-    #
-    # Enumerate /dev/hidraw* devices and resolve their corresponding /dev/input/event* nodes.
-    # Written for mruby, using idiomatic Ruby code and minimal dependencies.
-
-    # List all /dev/hidraw* device paths discovered via /sys/class/hidraw
+    # Liste aller /dev/hidraw*-Geräte
     def self.list_hidraw_devices
       sys_class = "/sys/class/hidraw"
-      return [] unless File.directory?(sys_class)
 
       Dir.entries(sys_class)
         .select { |entry| entry.start_with?("hidraw") }
@@ -16,39 +10,41 @@ class Tnk
         .map { |name| "/dev/#{name}" }
     end
 
-    # Given a /dev/hidrawN device, return its associated /dev/input/event* nodes.
-    def self.hidraw_to_event_devices(hidraw_dev)
-      sys_class = "/sys/class/hidraw"
+    def self.hidraw_to_by_id_names(hidraw_dev)
+      sys_class   = "/sys/class/hidraw"
       hidraw_name = File.basename(hidraw_dev)
-      sys_path = File.join(sys_class, hidraw_name, "device")
-      return [] unless File.exist?(sys_path)
+      sys_path    = File.join(sys_class, hidraw_name, "device")
 
-      begin
-        device_dir = File.realpath(sys_path)
-      rescue
-        return []
-      end
+      device_dir = File.realpath(sys_path)
 
-      events = []
-
+      # Alle eventX-Nodes ermitteln
+      event_nodes = []
       Dir.entries(device_dir).each do |entry|
-        next if entry == "." || entry == ".."
-        entry_path = File.join(device_dir, entry)
+        next if entry.start_with?(".")
+        path = File.join(device_dir, entry)
 
-        # If entry is "input", check its subdirectories for input*/event* nodes
-        if entry == "input" && File.directory?(entry_path)
-          Dir.entries(entry_path).each do |subentry|
-            subentry_path = File.join(entry_path, subentry)
-            if subentry.start_with?("input") && File.directory?(subentry_path)
-              events.concat(find_event_nodes(subentry_path))
+        if entry == "input" && File.directory?(path)
+          Dir.entries(path).each do |subentry|
+            subpath = File.join(path, subentry)
+            if subentry.start_with?("input") && File.directory?(subpath)
+              event_nodes.concat(find_event_nodes(subpath))
             end
           end
-        elsif entry.start_with?("input") && File.directory?(entry_path)
-          events.concat(find_event_nodes(entry_path))
+        elsif entry.start_with?("input") && File.directory?(path)
+          event_nodes.concat(find_event_nodes(path))
         end
       end
+      event_nodes.map! { |p| File.realpath(p) rescue p }
 
-      events.uniq.sort
+      # by-id Symlinks finden, die auf diese eventX zeigen
+      by_id_dir = "/dev/input/by-id"
+
+      Dir.entries(by_id_dir).filter_map do |name|
+        link_path = File.join(by_id_dir, name)
+        next unless File.symlink?(link_path)
+        target = File.realpath(link_path) rescue nil
+        event_nodes.include?(target) ? name : nil
+      end.sort
     end
 
     def self.calc_report_length(path)
@@ -68,19 +64,14 @@ class Tnk
       has_report_ids = false
       report_bits = 0
 
-      # State for Global
       input_size_bits = 0
       input_count = 0
 
-      # Helper for calculating byte length
-      def byte_length(bits)
-        (bits + 7) / 8
-      end
+      byte_length = ->(bits) { (bits + 7) / 8 }
 
-      # Update max_report_size if needed
       update_max = lambda do
         if report_bits > 0
-          length = byte_length(report_bits)
+          length = byte_length.call(report_bits)
           length += 1 if current_report_id != 0 || has_report_ids
           max_report_size = length if length > max_report_size
         end
@@ -89,7 +80,7 @@ class Tnk
       while i < bytes.size
         b = bytes[i]; i += 1
 
-        if b == 0xFE # long item
+        if b == 0xFE
           raise ReportDescriptorError, "Malformed long item" if i + 2 > bytes.size
           size = bytes[i]
           i += 2 + size
@@ -133,28 +124,20 @@ class Tnk
       if path.start_with?("/dev/hidraw")
         node = path.split("/").last
         sysfs_path = "/sys/class/hidraw/#{node}/device/report_descriptor"
-        puts "[INFO] Given device node, using sysfs report descriptor: #{sysfs_path}"
+        puts "[INFO] Using sysfs report descriptor: #{sysfs_path}"
         calc_report_length(sysfs_path)
       else
         calc_report_length(path)
       end
     end
 
-
     private
 
     # Helper: Find /dev/input/event* nodes in a directory
     def self.find_event_nodes(dir)
-      return [] unless File.directory?(dir)
       Dir.entries(dir)
         .select { |name| name.start_with?("event") }
         .map { |event| "/dev/input/#{event}" }
     end
   end
-
-# Example usage:
-# puts list_hidraw_devices.inspect
-# puts hidraw_to_event_devices("/dev/hidraw0").inspect
-
-
 end

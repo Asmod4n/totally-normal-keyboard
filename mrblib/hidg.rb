@@ -50,7 +50,6 @@ class Tnk
         puts "🧠 Scanning for HID report descriptors..."
         hid_index = 0
         each_hidraw_report_descriptor do |hidraw|
-          next unless file_readable?(hidraw)
           length = Tnk::Hidraw.calc_report_length_smart(hidraw)
           puts "🔧 Adding HID function #{hid_index} (report_length=#{length})..."
           func_dir = "functions/hid.usb#{hid_index}"
@@ -160,14 +159,6 @@ class Tnk
 
     def sh_capture(cmd)
       IO.popen(cmd) { |io| io.read }.chomp
-    end
-
-    def file_readable?(path)
-      begin
-        File.open(path, "r") { true }
-      rescue
-        false
-      end
     end
 
     def each_hidraw_report_descriptor
