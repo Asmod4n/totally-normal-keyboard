@@ -11,6 +11,7 @@
 #include <linux/input.h>  // For EVIOCGRAB
 #include <unistd.h>       // For usleep
 #include <sys/ioctl.h>    // For ioctl()
+#include <mruby/presym.h>
 
 static mrb_value grab(mrb_state *mrb, mrb_value self)
 {
@@ -83,9 +84,9 @@ decode_keysym(mrb_state *mrb, unsigned short sym, int code)
 void
 mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
 {
-    struct RClass *tnk = mrb_define_class(mrb, "Tnk", mrb->object_class);
-    mrb_define_module_function(mrb, tnk, "grab", grab, MRB_ARGS_REQ(1));
-    mrb_define_module_function(mrb, tnk, "ungrab", ungrab, MRB_ARGS_REQ(1));
+    struct RClass *tnk = mrb_define_class_id(mrb, MRB_SYM(Tnk), mrb->object_class);
+    mrb_define_module_function_id(mrb, tnk, MRB_SYM(grab), grab, MRB_ARGS_REQ(1));
+    mrb_define_module_function_id(mrb, tnk, MRB_SYM(ungrab), ungrab, MRB_ARGS_REQ(1));
 
     mrb_value keycode = mrb_hash_new(mrb);
     mrb_value keysym  = mrb_hash_new(mrb);
@@ -110,9 +111,15 @@ mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
         mrb_ary_push(mrb, keymaps, ary);
     }
 
-    mrb_define_const(mrb, tnk, "KeyCode", keycode);
-    mrb_define_const(mrb, tnk, "KeySym",  keysym);
-    mrb_define_const(mrb, tnk, "KeyMaps", keymaps);
+    mrb_define_const_id(mrb, tnk, MRB_SYM(KeyCode), keycode);
+    mrb_define_const_id(mrb, tnk, MRB_SYM(KeySym),  keysym);
+    mrb_define_const_id(mrb, tnk, MRB_SYM(KeyMaps), keymaps);
 }
 
-void mrb_totally_normal_keyboard_gem_final(mrb_state* mrb) {}
+void mrb_totally_normal_keyboard_gem_final(mrb_state* mrb)
+{
+    mrb_value tnk = mrb_obj_value(mrb_class_get_id(mrb, MRB_SYM(Tnk)));
+    mrb_value instance = mrb_cv_get(mrb, tnk, MRB_IVSYM(instance));
+    if (!mrb_nil_p(instance))
+        mrb_funcall_id(mrb, tnk, MRB_SYM(close), 0);
+}

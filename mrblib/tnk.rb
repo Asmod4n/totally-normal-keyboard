@@ -8,8 +8,8 @@ class Tnk
     @running = true
     Tnk::Hidraw.list_hidraw_devices.each do |hidraw_device|
       hidg_device = "/dev/hidg#{hidraw_device[-1]}"
-      hidraw_file = File.open(hidraw_device, 'r')
-      hidg_file = File.open(hidg_device, 'a')
+      hidraw_file = File.open(hidraw_device, 'rb')
+      hidg_file = File.open(hidg_device, 'wb')
       @hidraw_to_hidg[hidraw_file] = hidg_file
       @event_devices[hidraw_file] = Tnk::EventDevices.new(@io_uring, hidraw_device)
       @forward[hidraw_file] = true
@@ -61,8 +61,7 @@ class Tnk
       hid_proc.call(hidraw, hidg)
     end
 
-    Signal.trap(:INT) {close}
-    Signal.trap(:TERM) {close}
+    puts "✅ setup complete"
 
     while @running
       @io_uring.wait do |op|
@@ -72,7 +71,5 @@ class Tnk
         end
       end
     end
-  ensure
-    close
   end
 end

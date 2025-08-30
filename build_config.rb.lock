@@ -15,11 +15,6 @@ builds:
       branch: master
       commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
       version: 0.2.0
-    https://github.com/ksss/mruby-signal.git:
-      url: https://github.com/ksss/mruby-signal.git
-      branch: master
-      commit: 5101901ade09c98a21aa8ee59dc09749f54a1d80
-      version: 0.0.0
   release:
     https://github.com/Asmod4n/mruby-io_uring.git:
       url: https://github.com/Asmod4n/mruby-io_uring.git
@@ -31,8 +26,3 @@ builds:
       branch: master
       commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
       version: 0.2.0
-    https://github.com/ksss/mruby-signal.git:
-      url: https://github.com/ksss/mruby-signal.git
-      branch: master
-      commit: 5101901ade09c98a21aa8ee59dc09749f54a1d80
-      version: 0.0.0
