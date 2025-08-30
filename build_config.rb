@@ -18,8 +18,8 @@ MRuby::Build.new('release') do |conf|
   conf.toolchain :clang
   conf.gembox 'full-core'
 
-  conf.cc.flags << '-Os' << '-flto' << '-ffunction-sections' << '-fdata-sections' << '-march=armv8-a'
-  conf.cxx.flags << '-Os' << '-std=c++20' << '-flto' << '-ffunction-sections' << '-fdata-sections' << '-march=armv8-a'
+  conf.cc.flags << '-Os' << '-flto' << '-ffunction-sections' << '-fdata-sections' << '-march=armv8-a' << '-fvisibility=hidden'
+  conf.cxx.flags << '-Os' << '-std=c++20' << '-flto' << '-ffunction-sections' << '-fdata-sections' << '-march=armv8-a' << '-fvisibility=hidden'
   conf.linker.flags << '-Wl,--gc-sections' << '-Wl,--threads=4' << '-flto' << '-fuse-ld=lld'
 
   conf.gem File.expand_path(File.dirname(__FILE__))
