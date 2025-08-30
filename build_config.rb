@@ -1,6 +1,6 @@
 MRuby::Build.new('debug') do |conf|
   conf.toolchain :clang
-  #conf.enable_debug
+  conf.enable_debug
   conf.enable_test
   conf.gembox 'full-core'
   conf.enable_sanitizer "address,leak,undefined"

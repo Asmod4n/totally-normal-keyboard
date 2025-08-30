@@ -5,8 +5,8 @@ class Tnk
       self.instance ||= new
     end
 
-    def run(&block)
-      runner.run(&block)
+    def run
+      runner.run
     end
 
     def close
