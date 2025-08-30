@@ -1,7 +1,6 @@
 class Tnk
   class EventDevices
-    def initialize(io_uring, hidraw_device)
-      @io_uring = io_uring
+    def initialize(hidraw_device)
       @hidraw_device = hidraw_device
       @event_devices = []
 

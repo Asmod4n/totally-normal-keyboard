@@ -42,7 +42,6 @@ class Tnk
       Dir.entries(by_id_dir).filter_map do |name|
         link_path = File.join(by_id_dir, name)
         next unless File.symlink?(link_path)
-        next unless name.include?("-kbd")
         target = File.realpath(link_path) rescue nil
         event_nodes.include?(target) ? name : nil
       end.sort

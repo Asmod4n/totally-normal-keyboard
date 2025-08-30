@@ -1,8 +1,10 @@
 class Tnk
-  class Hidg
+  module Hidg
+    extend self
+
     GADGET = "/sys/kernel/config/usb_gadget/tnk"
 
-    def initialize
+    def setup
       if File.exist?("#{GADGET}/UDC")
         udc = read_first_line("#{GADGET}/UDC")
         if udc.delete(" \t\r\n\f\v") != ""
@@ -118,13 +120,11 @@ class Tnk
       mkdir_p(parent)
       retry
     rescue Errno::EEXIST
-      # Already exists
     end
 
     def ln_s(target, link)
       File.symlink(target, link)
     rescue Errno::EEXIST
-      # Ignore if symlink already exists
     end
 
     def rm_rf(path)
@@ -192,6 +192,5 @@ class Tnk
         end
       end
     end
-
   end
 end

@@ -30,7 +30,6 @@ static mrb_value ungrab(mrb_state *mrb, mrb_value self)
     return self;
 }
 
-
 void
 mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
 {
