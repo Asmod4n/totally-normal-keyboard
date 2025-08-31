@@ -51,10 +51,18 @@ int main(int argc, char **argv) {
     mrb_value tnk = mrb_obj_value(mrb_class_get_id(mrb, MRB_SYM(Tnk)));
     mrb_funcall_id(mrb, tnk, MRB_SYM(setup), 0);
 
+    if (mrb->exc) {
+        mrb_print_error(mrb);
+        mrb_close(mrb);
+        mrb = NULL;
+        return 1;
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork");
         mrb_close(mrb);
+        mrb = NULL;
         return 1;
     }
 
@@ -71,7 +79,10 @@ int main(int argc, char **argv) {
         }
         mrb_load_file(mrb, fp);
         fclose(fp);
-
+        if (mrb->exc) {
+            mrb_print_error(mrb);
+            _exit(1);
+        }
         mrb_funcall_id(mrb, tnk, MRB_SYM(run), 0);
 
         if (mrb->exc && errno != EINTR) {

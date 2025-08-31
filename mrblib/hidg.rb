@@ -8,11 +8,15 @@ class Tnk
       if File.exist?("#{GADGET}/UDC")
         udc = read_first_line("#{GADGET}/UDC")
         if udc.delete(" \t\r\n\f\v") != ""
-          puts "✅ Gadget already started (UDC=#{udc})."
-          return
+          original_pwd = Dir.pwd
+          stop
+          Dir.chdir(original_pwd)
         end
       end
 
+      sh "modprobe -r dwc2 || true"
+      sleep 1
+      sh "modprobe dwc2"
       sh "modprobe libcomposite"
       mkdir_p(GADGET)
       Dir.chdir(GADGET) do

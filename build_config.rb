@@ -11,7 +11,6 @@ MRuby::Build.new('debug') do |conf|
   conf.gem File.expand_path(File.dirname(__FILE__))
   conf.gem mgem: 'mruby-io-uring'
   conf.gem mgem: 'mruby-c-ext-helpers'
-  conf.gem core: 'mruby-pack'
 end
 
 MRuby::Build.new('release') do |conf|
@@ -25,5 +24,4 @@ MRuby::Build.new('release') do |conf|
   conf.gem File.expand_path(File.dirname(__FILE__))
   conf.gem mgem: 'mruby-io-uring'
   conf.gem mgem: 'mruby-c-ext-helpers'
-  conf.gem core: 'mruby-pack'
 end

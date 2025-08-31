@@ -30,12 +30,136 @@ static mrb_value ungrab(mrb_state *mrb, mrb_value self)
     return self;
 }
 
+#include "keymap.h" // enthält plain_map[NR_KEYS]
+
+#include <mruby/string.h>
+
+// Modifier Bits
+#define MOD_LCTRL   0x01
+#define MOD_LSHIFT  0x02
+#define MOD_LALT    0x04
+#define MOD_LGUI    0x08
+#define MOD_RCTRL   0x10
+#define MOD_RSHIFT  0x20
+#define MOD_RALT    0x40
+#define MOD_RGUI    0x80
+
+// Vollständige US-HID Usage IDs für Linux-Scancodes (nicht belegte = 0x00)
+static const uint8_t scancode_to_hid[NR_KEYS] = {
+  0x00,0x29,0x1E,0x1F,0x20,0x21,0x22,0x23,
+  0x24,0x25,0x26,0x27,0x2D,0x2E,0x2A,0x2B,
+  0x14,0x1A,0x08,0x15,0x17,0x1C,0x18,0x0C,
+  0x12,0x13,0x2F,0x30,0x28,0x04,0x16,0x07,
+  0x09,0x0A,0x0B,0x0D,0x0E,0x0F,0x33,0x34,
+  0x35,0xE1,0x1D,0x1B,0x06,0x19,0x05,0x11,
+  0x10,0x36,0x37,0x38,0xE5,0x55,0xE0,0x2C,
+  0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F,0x40,
+  0x41,0x42,0x43,0x53,0x47,0x5F,0x60,0x61,
+  0x56,0x5C,0x5D,0x5E,0x57,0x59,0x5A,0x5B,
+  0x62,0x63,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+  0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+// Hilfsfunktion: UTF-8 zu Unicode-Codepoint (nur 1 Zeichen)
+static unsigned int utf8_to_codepoint(const char *s, int *len) {
+  unsigned char c = (unsigned char)s[0];
+  if (c < 0x80) { // 1-Byte ASCII
+    *len = 1;
+    return c;
+  } else if ((c & 0xE0) == 0xC0) { // 2-Byte
+    *len = 2;
+    return ((c & 0x1F) << 6) | ((unsigned char)s[1] & 0x3F);
+  } else if ((c & 0xF0) == 0xE0) { // 3-Byte
+    *len = 3;
+    return ((c & 0x0F) << 12) | (((unsigned char)s[1] & 0x3F) << 6) | ((unsigned char)s[2] & 0x3F);
+  } else if ((c & 0xF8) == 0xF0) { // 4-Byte
+    *len = 4;
+    return ((c & 0x07) << 18) | (((unsigned char)s[1] & 0x3F) << 12) |
+           (((unsigned char)s[2] & 0x3F) << 6) | ((unsigned char)s[3] & 0x3F);
+  }
+  *len = 1;
+  return c;
+}
+
+// Scancode für Zeichen finden (unteres Byte vergleichen)
+static int find_scancode_for_char(unsigned short ch) {
+  unsigned char target = (unsigned char)ch;
+  for (int i = 0; i < NR_KEYS; i++) {
+    if ((plain_map[i] & 0xFF) == target) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+static mrb_value mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
+  mrb_value *argv;
+  mrb_int argc;
+  mrb_get_args(mrb, "*", &argv, &argc);
+
+  uint8_t report[8] = {0};
+  uint8_t modifier = 0;
+
+  int arg_index = 0;
+  // Modifiers erkennen
+  for (; arg_index < argc; arg_index++) {
+    if (mrb_symbol_p(argv[arg_index])) {
+      switch (mrb_symbol(argv[arg_index])) {
+        case MRB_SYM(lctrl):  modifier |= MOD_LCTRL;  break;
+        case MRB_SYM(lshift): modifier |= MOD_LSHIFT; break;
+        case MRB_SYM(lalt):   modifier |= MOD_LALT;   break;
+        case MRB_SYM(lgui):   modifier |= MOD_LGUI;   break;
+        case MRB_SYM(rctrl):  modifier |= MOD_RCTRL;  break;
+        case MRB_SYM(rshift): modifier |= MOD_RSHIFT; break;
+        case MRB_SYM(ralt):   modifier |= MOD_RALT;   break;
+        case MRB_SYM(rgui):   modifier |= MOD_RGUI;   break;
+        default: break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  // Alle verbleibenden Argumente als Zeichen interpretieren
+  int key_slot = 0;
+  for (; arg_index < argc && key_slot < 6; arg_index++, key_slot++) {
+    if (mrb_string_p(argv[arg_index])) {
+        const char *str = RSTRING_PTR(argv[arg_index]);
+        int ulen;
+        unsigned int codepoint = utf8_to_codepoint(str, &ulen);
+        int sc = find_scancode_for_char((unsigned short)codepoint);
+        if (sc >= 0) {
+            report[2 + key_slot] = scancode_to_hid[sc];
+        }
+    }
+  }
+
+  report[0] = modifier;
+
+  return mrb_str_new(mrb, (char*) report, sizeof(report));
+}
+
+
 void
 mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
 {
     struct RClass *tnk = mrb_define_class_id(mrb, MRB_SYM(Tnk), mrb->object_class);
     mrb_define_module_function_id(mrb, tnk, MRB_SYM(grab), grab, MRB_ARGS_REQ(1));
     mrb_define_module_function_id(mrb, tnk, MRB_SYM(ungrab), ungrab, MRB_ARGS_REQ(1));
+    struct RClass *hotkeys = mrb_define_module_under_id(mrb, tnk, MRB_SYM(Hotkeys));
+    mrb_define_module_function_id(mrb, hotkeys, MRB_SYM(build_report), mrb_generate_hid_report, MRB_ARGS_ANY());
 }
 
 void mrb_totally_normal_keyboard_gem_final(mrb_state* mrb)

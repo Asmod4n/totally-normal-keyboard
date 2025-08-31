@@ -7,6 +7,8 @@ class Tnk
 
   def setup
     Hidg.setup
+    #Keymap.generate
+    #Hotkeys.load_keymaps
     Tnk::Hidraw.list_hidraw_devices.each do |hidraw_device|
       hidg_device = "/dev/hidg#{hidraw_device[-1]}"
       hidraw_file = File.open(hidraw_device, 'rb')
@@ -30,6 +32,7 @@ class Tnk
     @io_uring = IO::Uring.new
     hid_proc = Proc.new do |hidraw, hidg|
       @io_uring.prep_read_fixed(hidraw) do |read_op|
+        Hotkeys.handle_hid_report(read_op.buf)
         @io_uring.prep_write(hidg, read_op.buf, 0) do |_write_op|
           @io_uring.return_used_buffer(read_op)
         end
