@@ -5,6 +5,8 @@
 #include <unistd.h>       // For usleep
 #include <sys/ioctl.h>    // For ioctl()
 #include <mruby/presym.h>
+#include <stdbool.h>
+#include <mruby/array.h>
 
 static mrb_value grab(mrb_state *mrb, mrb_value self)
 {
@@ -72,28 +74,61 @@ static const uint8_t scancode_to_hid[NR_KEYS] = {
   0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 };
 
-// Hilfsfunktion: UTF-8 zu Unicode-Codepoint (nur 1 Zeichen)
-static unsigned int utf8_to_codepoint(const char *s, int *len) {
-  unsigned char c = (unsigned char)s[0];
-  if (c < 0x80) { // 1-Byte ASCII
-    *len = 1;
-    return c;
-  } else if ((c & 0xE0) == 0xC0) { // 2-Byte
-    *len = 2;
-    return ((c & 0x1F) << 6) | ((unsigned char)s[1] & 0x3F);
-  } else if ((c & 0xF0) == 0xE0) { // 3-Byte
-    *len = 3;
-    return ((c & 0x0F) << 12) | (((unsigned char)s[1] & 0x3F) << 6) | ((unsigned char)s[2] & 0x3F);
-  } else if ((c & 0xF8) == 0xF0) { // 4-Byte
-    *len = 4;
-    return ((c & 0x07) << 18) | (((unsigned char)s[1] & 0x3F) << 12) |
-           (((unsigned char)s[2] & 0x3F) << 6) | ((unsigned char)s[3] & 0x3F);
+// Returns true on success, false on invalid/incomplete UTF-8.
+// Consumes exactly one codepoint from (s, len) and sets *cp and *consumed.
+static bool utf8_next_cp(const char *s, size_t len, uint32_t *cp, size_t *consumed) {
+  if (len == 0) return false;
+  const unsigned char c0 = (unsigned char)s[0];
+
+  if (c0 < 0x80) { // 1-byte ASCII
+    *cp = c0;
+    *consumed = 1;
+    return true;
   }
-  *len = 1;
-  return c;
+
+  // Determine expected length and masks; validate continuation bytes and overlongs.
+  if ((c0 & 0xE0) == 0xC0) { // 2-byte
+    if (len < 2) return false;
+    const unsigned char c1 = (unsigned char)s[1];
+    if ((c1 & 0xC0) != 0x80) return false;
+    uint32_t v = ((c0 & 0x1F) << 6) | (c1 & 0x3F);
+    if (v < 0x80) return false; // overlong
+    *cp = v;
+    *consumed = 2;
+    return true;
+  }
+
+  if ((c0 & 0xF0) == 0xE0) { // 3-byte
+    if (len < 3) return false;
+    const unsigned char c1 = (unsigned char)s[1];
+    const unsigned char c2 = (unsigned char)s[2];
+    if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80) return false;
+    uint32_t v = ((c0 & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F);
+    // Overlong and surrogate checks
+    if (v < 0x800) return false;
+    if (v >= 0xD800 && v <= 0xDFFF) return false;
+    *cp = v;
+    *consumed = 3;
+    return true;
+  }
+
+  if ((c0 & 0xF8) == 0xF0) { // 4-byte
+    if (len < 4) return false;
+    const unsigned char c1 = (unsigned char)s[1];
+    const unsigned char c2 = (unsigned char)s[2];
+    const unsigned char c3 = (unsigned char)s[3];
+    if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80) return false;
+    uint32_t v = ((c0 & 0x07) << 18) | ((c1 & 0x3F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+    // Overlong or out-of-range
+    if (v < 0x10000 || v > 0x10FFFF) return false;
+    *cp = v;
+    *consumed = 4;
+    return true;
+  }
+
+  return false; // invalid leading byte
 }
 
-// Scancode für Zeichen finden (unteres Byte vergleichen)
 static int find_scancode_for_char(unsigned short ch) {
   unsigned char target = (unsigned char)ch;
   for (int i = 0; i < NR_KEYS; i++) {
@@ -109,48 +144,63 @@ static mrb_value mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
   mrb_int argc;
   mrb_get_args(mrb, "*", &argv, &argc);
 
-  uint8_t report[8] = {0};
+  uint8_t report[8] = {0}; // [0]=modifiers, [1]=reserved, [2..7]=keys
   uint8_t modifier = 0;
 
   int arg_index = 0;
-  // Modifiers erkennen
+
+  // Parse leading symbols as modifiers
   for (; arg_index < argc; arg_index++) {
-    if (mrb_symbol_p(argv[arg_index])) {
-      switch (mrb_symbol(argv[arg_index])) {
-        case MRB_SYM(lctrl):  modifier |= MOD_LCTRL;  break;
-        case MRB_SYM(lshift): modifier |= MOD_LSHIFT; break;
-        case MRB_SYM(lalt):   modifier |= MOD_LALT;   break;
-        case MRB_SYM(lgui):   modifier |= MOD_LGUI;   break;
-        case MRB_SYM(rctrl):  modifier |= MOD_RCTRL;  break;
-        case MRB_SYM(rshift): modifier |= MOD_RSHIFT; break;
-        case MRB_SYM(ralt):   modifier |= MOD_RALT;   break;
-        case MRB_SYM(rgui):   modifier |= MOD_RGUI;   break;
-        default: break;
-      }
-    } else {
-      break;
+    if (!mrb_symbol_p(argv[arg_index])) break;
+
+    mrb_sym sym = mrb_symbol(argv[arg_index]);
+    switch (sym) {
+      case MRB_SYM(lctrl):  modifier |= MOD_LCTRL;  break;
+      case MRB_SYM(lshift): modifier |= MOD_LSHIFT; break;
+      case MRB_SYM(lalt):   modifier |= MOD_LALT;   break;
+      case MRB_SYM(lgui):   modifier |= MOD_LGUI;   break;
+      case MRB_SYM(rctrl):  modifier |= MOD_RCTRL;  break;
+      case MRB_SYM(rshift): modifier |= MOD_RSHIFT; break;
+      case MRB_SYM(ralt):   modifier |= MOD_RALT;   break;
+      case MRB_SYM(rgui):   modifier |= MOD_RGUI;   break;
+      default: /* ignore unknown symbols */ break;
     }
   }
 
-  // Alle verbleibenden Argumente als Zeichen interpretieren
+  // Fill up to 6 key slots
   int key_slot = 0;
-  for (; arg_index < argc && key_slot < 6; arg_index++, key_slot++) {
-    if (mrb_string_p(argv[arg_index])) {
-        const char *str = RSTRING_PTR(argv[arg_index]);
-        int ulen;
-        unsigned int codepoint = utf8_to_codepoint(str, &ulen);
-        int sc = find_scancode_for_char((unsigned short)codepoint);
-        if (sc >= 0) {
-            report[2 + key_slot] = scancode_to_hid[sc];
-        }
+  for (; arg_index < argc && key_slot < 6; arg_index++) {
+    if (!mrb_string_p(argv[arg_index])) {
+      // ignore non-string, non-symbol args (or raise if you prefer)
+      continue;
     }
+
+    const char *buf = RSTRING_PTR(argv[arg_index]);
+    size_t len = (size_t)RSTRING_LEN(argv[arg_index]);
+
+    if (len == 0) continue;
+
+    uint32_t cp;
+    size_t consumed;
+    if (!utf8_next_cp(buf, len, &cp, &consumed)) {
+      mrb_raise(mrb, E_ARGUMENT_ERROR, "invalid UTF-8 sequence");
+    }
+
+    int sc = find_scancode_for_char((unsigned short)cp);
+    if (sc >= 0) {
+      uint8_t hid = scancode_to_hid[sc];
+      report[2 + key_slot] = hid;
+      key_slot++;
+    }
+    // else: character has no scancode mapping; skip (or raise if desired)
   }
+
+  // Optional: if more characters remain (argc - arg_index > 0) and key_slot == 6,
+  // consider rollover error: set report[2] = 0x01 and zero the rest per HID spec.
 
   report[0] = modifier;
-
-  return mrb_str_new(mrb, (char*) report, sizeof(report));
+  return mrb_str_new(mrb, (const char *)report, sizeof(report));
 }
-
 
 void
 mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)

@@ -28,7 +28,7 @@ static int drop_privileges(const char *username) {
     if (setgid(pw->pw_gid) != 0) { perror("setgid"); return -1; }
     if (setuid(pw->pw_uid) != 0) { perror("setuid"); return -1; }
     if (setuid(0) != -1) {
-        fprintf(stderr, "Privilege drop failed: still root!\n");
+        perror("Privilege drop failed: still root!\n");
         return -1;
     }
     return 0;
@@ -38,14 +38,12 @@ int main(int argc, char **argv) {
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
+    errno = 0;
     mrb = mrb_open();
     if (!mrb) {
-        fprintf(stderr, "Could not initialize mruby\n");
+        perror("Could not initialize mruby\n");
         return 1;
     }
-
-    const char *drop_user = getenv("TNK_DROP_USER");
-    if (!drop_user) drop_user = "nobody";
 
     // Call Tnk.setup as root
     mrb_value tnk = mrb_obj_value(mrb_class_get_id(mrb, MRB_SYM(Tnk)));
@@ -67,29 +65,31 @@ int main(int argc, char **argv) {
     }
 
     if (pid == 0) {
+        const char *drop_user = getenv("TNK_DROP_USER");
+        if (!drop_user) drop_user = "nobody";
         // --- Child: drop privileges and run ---
         if (drop_privileges(drop_user) != 0) {
-            _exit(1);
+            _Exit(1);
         }
 
         FILE *fp = fopen("main.rb", "r");
         if (!fp) {
             perror("main.rb");
-            _exit(1);
+            _Exit(1);
         }
         mrb_load_file(mrb, fp);
         fclose(fp);
         if (mrb->exc) {
             mrb_print_error(mrb);
-            _exit(1);
+            _Exit(1);
         }
         mrb_funcall_id(mrb, tnk, MRB_SYM(run), 0);
 
         if (mrb->exc && errno != EINTR) {
             mrb_print_error(mrb);
-            _exit(1);
+            _Exit(1);
         }
-        _exit(0);
+        _Exit(0);
     }
 
     // --- Parent: still root, wait for child ---

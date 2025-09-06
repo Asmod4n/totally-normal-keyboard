@@ -2,27 +2,47 @@
 mruby:
   version: 3.4.0
   release_no: 30400
-  git_commit: f830513978e15f7a9af55380a3208d60d345c416
+  git_commit: 797caf4fc50509def99a281658e6467a366d23bc
 builds:
   debug:
     https://github.com/Asmod4n/mruby-io_uring.git:
       url: https://github.com/Asmod4n/mruby-io_uring.git
       branch: main
-      commit: 9962ef39e87c9e818504aed28d13f14b594d485f
+      commit: e6d538b7229c6fdbfffa58cf984b4351517f328a
       version: 0.10.0
     https://github.com/Asmod4n/mruby-c-ext-helpers.git:
       url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
       branch: master
       commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
       version: 0.2.0
+    https://github.com/FlavourSys/mruby-inotify.git:
+      url: https://github.com/FlavourSys/mruby-inotify.git
+      branch: master
+      commit: cd00265532384f5eb71bb343eaad1a11d5041db3
+      version: 0.0.0
+    https://github.com/ksss/mruby-file-stat.git:
+      url: https://github.com/ksss/mruby-file-stat.git
+      branch: master
+      commit: 7d0e63a95a38b34c635b708874ec624c7c860507
+      version: 0.0.0
   release:
     https://github.com/Asmod4n/mruby-io_uring.git:
       url: https://github.com/Asmod4n/mruby-io_uring.git
       branch: main
-      commit: 9962ef39e87c9e818504aed28d13f14b594d485f
+      commit: e6d538b7229c6fdbfffa58cf984b4351517f328a
       version: 0.10.0
     https://github.com/Asmod4n/mruby-c-ext-helpers.git:
       url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
       branch: master
       commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
       version: 0.2.0
+    https://github.com/FlavourSys/mruby-inotify.git:
+      url: https://github.com/FlavourSys/mruby-inotify.git
+      branch: master
+      commit: cd00265532384f5eb71bb343eaad1a11d5041db3
+      version: 0.0.0
+    https://github.com/ksss/mruby-file-stat.git:
+      url: https://github.com/ksss/mruby-file-stat.git
+      branch: master
+      commit: 7d0e63a95a38b34c635b708874ec624c7c860507
+      version: 0.0.0
