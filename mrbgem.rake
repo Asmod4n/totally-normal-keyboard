@@ -5,7 +5,6 @@ MRuby::Gem::Specification.new('totally-normal-keyboard') do |spec|
   spec.add_dependency 'mruby-pack'
   spec.add_dependency 'mruby-time'
   spec.add_dependency 'mruby-set'
-  spec.add_dependency 'mruby-inotify'
 
   sh File.join(__dir__, 'scripts', 'gen_keymap_h.sh')
 
