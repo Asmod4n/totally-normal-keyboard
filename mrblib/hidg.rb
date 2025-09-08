@@ -14,7 +14,7 @@ class Tnk
         end
       end
 
-      sh "modprobe -r dwc2 || true"
+      sh "modprobe -r dwc2"
       sleep 1
       sh "modprobe dwc2"
       sh "modprobe libcomposite"

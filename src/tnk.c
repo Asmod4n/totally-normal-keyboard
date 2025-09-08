@@ -7,6 +7,21 @@
 #include <mruby/presym.h>
 #include <stdbool.h>
 #include <mruby/array.h>
+#include <mruby/string.h>
+#include <dlfcn.h>
+#include <limits.h>
+#include <linux/keyboard.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+
+#include <libgen.h>   // for dirname()
+#include <unistd.h>   // for access(), execv()
+#undef P_ALL
+#undef P_PID
+#undef P_PGID
+#undef P_PIDFD
+#include <sys/wait.h>
 
 static mrb_value grab(mrb_state *mrb, mrb_value self)
 {
@@ -31,10 +46,6 @@ static mrb_value ungrab(mrb_state *mrb, mrb_value self)
 
     return self;
 }
-
-#include "keymap.h" // enthält plain_map[NR_KEYS]
-
-#include <mruby/string.h>
 
 // Modifier Bits
 #define MOD_LCTRL   0x01
@@ -129,14 +140,151 @@ static bool utf8_next_cp(const char *s, size_t len, uint32_t *cp, size_t *consum
   return false; // invalid leading byte
 }
 
-static int find_scancode_for_char(unsigned short ch) {
-  unsigned char target = (unsigned char)ch;
-  for (int i = 0; i < NR_KEYS; i++) {
-    if ((plain_map[i] & 0xFF) == target) {
-      return i;
+static mrb_value
+gen_keymap(mrb_state *mrb, mrb_value self)
+{
+    char base_dir[PATH_MAX];
+    char script_path[PATH_MAX];
+    char resolved[PATH_MAX];
+
+    // Resolve TNK_PREFIX to an absolute path
+    if (!realpath(TNK_PREFIX, base_dir)) {
+        mrb_sys_fail(mrb, "realpath(TNK_PREFIX)");
     }
-  }
-  return -1;
+
+    // Join base_dir with the fixed relative path
+    // This avoids format strings and makes the join explicit
+    if (snprintf(script_path, sizeof(script_path),
+                 "%s/share/totally-normal-keyboard/gen_keymap_h.sh",
+                 base_dir) >= (int)sizeof(script_path)) {
+        mrb_raise(mrb, E_RUNTIME_ERROR, "script path too long");
+    }
+
+    // Resolve the final script path
+    if (!realpath(script_path, resolved)) {
+        mrb_sys_fail(mrb, "realpath(script_path)");
+    }
+
+    // Ensure the resolved path starts with the trusted base_dir
+    size_t base_len = strlen(base_dir);
+    if (strncmp(resolved, base_dir, base_len) != 0 ||
+        (resolved[base_len] != '/' && resolved[base_len] != '\0')) {
+        mrb_raise(mrb, E_RUNTIME_ERROR, "script path escapes TNK_PREFIX");
+    }
+
+    // Check it's executable
+    if (access(resolved, X_OK) != 0) {
+        mrb_sys_fail(mrb, "access(script_path)");
+    }
+
+    // Fork/exec without a shell
+    pid_t pid = fork();
+    if (pid < 0) {
+        mrb_sys_fail(mrb, "fork");
+    } else if (pid == 0) {
+        char *argv[] = { resolved, NULL };
+        execv(resolved, argv);
+        _exit(127);
+    }
+
+    int status;
+    if (waitpid(pid, &status, 0) < 0) {
+        mrb_sys_fail(mrb, "waitpid");
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        mrb_raisef(mrb, E_RUNTIME_ERROR,
+                   "gen_keymap_h.sh failed (exit code %d)",
+                   WEXITSTATUS(status));
+    }
+
+    return mrb_true_value();
+}
+
+
+static unsigned short plain_map[NR_KEYS];
+static int keymap_loaded = 0;
+
+static int parse_plain_map_file(const char *path) {
+    FILE *fp = fopen(path, "r");
+    if (!fp) {
+        fprintf(stderr, "Error opening %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+
+    char buf[1024];
+    int found = 0;
+    int idx = 0;
+
+    while (fgets(buf, sizeof(buf), fp)) {
+        if (!found) {
+            if (strstr(buf, "unsigned short plain_map")) {
+                found = 1;
+            }
+            continue;
+        }
+
+        if (strchr(buf, '}')) {
+            break; // end of array
+        }
+
+        char *p = buf;
+        while (*p) {
+            // skip whitespace and commas
+            while (*p == ' ' || *p == '\t' || *p == ',' || *p == '\n') p++;
+            if (*p == '\0') break;
+
+            // parse number (hex or decimal)
+            char *end;
+            unsigned long val = strtoul(p, &end, 0);
+            if (p != end && idx < NR_KEYS) {
+                plain_map[idx++] = (unsigned short)val;
+            }
+            p = end;
+        }
+    }
+
+    fclose(fp);
+
+    if (idx != NR_KEYS) {
+        fprintf(stderr, "Warning: expected %d keys, got %d\n", NR_KEYS, idx);
+    }
+
+    return 0;
+}
+
+int find_scancode_for_char(unsigned short ch) {
+    unsigned char target = (unsigned char)ch;
+    for (int i = 0; i < NR_KEYS; i++) {
+        if ((plain_map[i] & 0xFF) == target) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static mrb_value
+load_keymap(mrb_state *mrb, mrb_value self)
+{
+    if (keymap_loaded) {
+        return mrb_true_value(); // already loaded
+    }
+
+    char map_path[PATH_MAX];
+    int len = snprintf(map_path, sizeof(map_path),
+                       "%s/share/totally-normal-keyboard/keymap.h",
+                       TNK_PREFIX);
+    if (len < 0 || (size_t)len >= sizeof(map_path)) {
+        mrb_raise(mrb, E_RUNTIME_ERROR, "keymap.h path too long");
+        return mrb_false_value();
+    }
+
+    if (parse_plain_map_file(map_path) != 0) {
+        mrb_raisef(mrb, E_RUNTIME_ERROR, "failed to parse %S", mrb_str_new_cstr(mrb, map_path));
+        return mrb_false_value();
+    }
+
+    keymap_loaded = 1;
+    return mrb_true_value();
 }
 
 static mrb_value mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
@@ -208,6 +356,9 @@ mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
     struct RClass *tnk = mrb_define_class_id(mrb, MRB_SYM(Tnk), mrb->object_class);
     mrb_define_module_function_id(mrb, tnk, MRB_SYM(grab), grab, MRB_ARGS_REQ(1));
     mrb_define_module_function_id(mrb, tnk, MRB_SYM(ungrab), ungrab, MRB_ARGS_REQ(1));
+    mrb_define_module_function_id(mrb, tnk, MRB_SYM(gen_keymap), gen_keymap, MRB_ARGS_NONE());
+    mrb_define_module_function_id(mrb, tnk, MRB_SYM(load_keymap), load_keymap, MRB_ARGS_NONE());
+    mrb_define_const_id(mrb, tnk, MRB_SYM(PREFIX), mrb_str_new_lit(mrb, TNK_PREFIX));
     struct RClass *hotkeys = mrb_define_module_under_id(mrb, tnk, MRB_SYM(Hotkeys));
     mrb_define_module_function_id(mrb, hotkeys, MRB_SYM(build_report), mrb_generate_hid_report, MRB_ARGS_ANY());
 }

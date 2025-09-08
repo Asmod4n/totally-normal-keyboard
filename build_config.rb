@@ -1,3 +1,4 @@
+prefix = ENV['PREFIX'] || '/usr/local'
 MRuby::Build.new('debug') do |conf|
   conf.toolchain :clang
   conf.enable_debug
@@ -7,6 +8,9 @@ MRuby::Build.new('debug') do |conf|
 
   conf.cc.flags << '-Og' << '-g' << '-fno-omit-frame-pointer' << '-march=armv8-a'
   conf.cxx.flags << '-Og' << '-g' << '-std=c++20' << '-fno-omit-frame-pointer' << '-march=armv8-a'
+
+  conf.cc.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
+  conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
 
   conf.gem File.expand_path(File.dirname(__FILE__))
   conf.gem mgem: 'mruby-io-uring'
@@ -20,6 +24,8 @@ MRuby::Build.new('release') do |conf|
   conf.cc.flags << '-Os' << '-flto' << '-ffunction-sections' << '-fdata-sections' << '-march=armv8-a'
   conf.cxx.flags << '-Os' << '-std=c++20' << '-flto' << '-ffunction-sections' << '-fdata-sections' << '-march=armv8-a'
   conf.linker.flags << '-Wl,--gc-sections' << '-Wl,--threads=4' << '-flto' << '-fuse-ld=lld'
+  conf.cc.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
+  conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
 
   conf.gem File.expand_path(File.dirname(__FILE__))
   conf.gem mgem: 'mruby-io-uring'
