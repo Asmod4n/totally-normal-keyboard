@@ -2,7 +2,7 @@ class Tnk
   module Hotkeys
     @@hotkeys = {}
     def self.on_hotkey(*args, &blk)
-      raise "Kein Block übergeben" unless blk
+      raise "no block given" unless blk
       report = build_report(*args)
       @@hotkeys[report] = blk
     end

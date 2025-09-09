@@ -5,8 +5,16 @@ class Tnk
       self.instance ||= new
     end
 
-    def setup
-      runner.setup
+    def setup_root
+      runner.setup_root
+    end
+
+    def setup_user
+      runner.setup_user
+    end
+
+    def after_setup
+      runner.after_setup
     end
 
     def run

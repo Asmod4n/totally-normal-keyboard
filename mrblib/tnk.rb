@@ -5,10 +5,8 @@ class Tnk
     @event_devices = {}
   end
 
-  def setup
+  def setup_root
     Hidg.setup
-    Tnk.gen_keymap
-    Tnk.load_keymap
     Tnk::Hidraw.list_hidraw_devices.each do |hidraw_device|
       hidg_device = "/dev/hidg#{hidraw_device[-1]}"
       hidraw_file = File.open(hidraw_device, 'rb')
@@ -19,7 +17,9 @@ class Tnk
     end
   end
 
-  def run
+  def setup_user
+    Tnk.gen_keymap
+    Tnk.load_keymap
     @io_uring = IO::Uring.new
     hid_proc = Proc.new do |hidraw, hidg|
       @io_uring.prep_read_fixed(hidraw) do |read_op|
@@ -35,12 +35,22 @@ class Tnk
       hid_proc.call(hidraw, hidg)
     end
 
-    puts "✅ setup complete"
+    debug_puts "✅ setup complete"
+  end
 
+  def self.on_setup(&block)
+    @@after_setup = block
+  end
+
+  def after_setup
+    @@after_setup&.call
+  end
+
+  def run
     while true
       @io_uring.wait do |op|
         if op.errno
-          puts op.inspect
+          warn op.inspect
           raise op.errno
         end
       end

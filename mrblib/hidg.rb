@@ -37,11 +37,11 @@ class Tnk
         mkdir_p("functions/mass_storage.usb0")
         mkdir_p("/piusb")
         unless File.exist?("/piusb/disk.img")
-          puts "📦 Creating disk.img..."
+          debug_puts "📦 Creating disk.img..."
           sh "dd if=/dev/zero of=/piusb/disk.img bs=1M count=128"
           sh "mkfs.vfat /piusb/disk.img"
         else
-          puts "✅ disk.img exists – skipping creation."
+          debug_puts "✅ disk.img exists – skipping creation."
         end
         file_write("functions/mass_storage.usb0/stall", "0")
         file_write("functions/mass_storage.usb0/lun.0/file", "/piusb/disk.img")
@@ -53,11 +53,11 @@ class Tnk
         file_write("functions/ncm.usb0/host_addr", "02:98:76:54:32:10")
         ln_s("functions/ncm.usb0", "configs/c.1/ncm.usb0")
 
-        puts "🧠 Scanning for HID report descriptors..."
+        debug_puts "🧠 Scanning for HID report descriptors..."
         hid_index = 0
         each_hidraw_report_descriptor do |hidraw|
           length = Tnk::Hidraw.calc_report_length_smart(hidraw)
-          puts "🔧 Adding HID function #{hid_index} (report_length=#{length})..."
+          debug_puts "🔧 Adding HID function #{hid_index} (report_length=#{length})..."
           func_dir = "functions/hid.usb#{hid_index}"
           mkdir_p(func_dir)
           file_write("#{func_dir}/protocol", "0")
@@ -75,14 +75,14 @@ class Tnk
 
         sleep 2
         unless sh_silent("ip link set usb0 up") || sh_silent("ifconfig usb0 up")
-          puts "⚠️  Could not bring up usb0 (ip/ifconfig failed)"
+          debug_puts "⚠️  Could not bring up usb0 (ip/ifconfig failed)"
         end
         sh_silent("ip -6 addr add fe80::1 dev usb0")
       end
     end
 
     def stop
-      puts "🛑 Cleaning up USB gadget tnk..."
+      debug_puts "🛑 Cleaning up USB gadget tnk..."
       if File.exist?("#{GADGET}/UDC")
         file_write("#{GADGET}/UDC", "")
         sleep 1
@@ -93,18 +93,18 @@ class Tnk
       end
 
       Dir.chdir(GADGET)
-      puts "🧹 Removing config symlinks..."
+      debug_puts "🧹 Removing config symlinks..."
       remove_symlinks("configs/c.1")
       Dir.rmdir("configs/c.1/strings/0x409")
       Dir.rmdir("configs/c.1")
 
-      puts "🧹 Removing functions..."
+      debug_puts "🧹 Removing functions..."
       remove_directories("functions")
 
       Dir.rmdir("strings/0x409")
       Dir.chdir("..")
       Dir.rmdir("tnk")
-      puts "✅ Gadget tnk removed."
+      debug_puts "✅ Gadget tnk removed."
     end
 
     private
@@ -146,10 +146,10 @@ class Tnk
     end
 
     def sh(cmd)
-      puts "→ #{cmd}"
+      debug_puts "→ #{cmd}"
       IO.popen(cmd) do |io|
         while line = io.gets
-          puts line
+          debug_puts line
         end
       end
       status = $?

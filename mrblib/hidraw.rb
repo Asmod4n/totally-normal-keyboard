@@ -124,7 +124,7 @@ class Tnk
       if path.start_with?("/dev/hidraw")
         node = path.split("/").last
         sysfs_path = "/sys/class/hidraw/#{node}/device/report_descriptor"
-        puts "[INFO] Using sysfs report descriptor: #{sysfs_path}"
+        debug_puts "[INFO] Using sysfs report descriptor: #{sysfs_path}"
         calc_report_length(sysfs_path)
       else
         calc_report_length(path)

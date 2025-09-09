@@ -23,6 +23,51 @@
 #undef P_PIDFD
 #include <sys/wait.h>
 
+int resolve_tnk_path(mrb_state *mrb,
+                     const char *rel_path,
+                     int mode,
+                     char *out,
+                     size_t out_size)
+{
+    char base_dir[PATH_MAX];
+    char joined[PATH_MAX];
+    char resolved[PATH_MAX];
+
+    if (!realpath(TNK_PREFIX, base_dir)) {
+        mrb_sys_fail(mrb, "realpath(TNK_PREFIX)");
+        return -1;
+    }
+
+    if (snprintf(joined, sizeof(joined), "%s/%s", base_dir, rel_path) >= (int)sizeof(joined)) {
+        mrb_raise(mrb, E_RUNTIME_ERROR, "path too long");
+        return -1;
+    }
+
+    if (!realpath(joined, resolved)) {
+        mrb_sys_fail(mrb, "realpath(joined)");
+        return -1;
+    }
+
+    size_t base_len = strlen(base_dir);
+    if (strncmp(resolved, base_dir, base_len) != 0 ||
+        (resolved[base_len] != '/' && resolved[base_len] != '\0')) {
+        mrb_raise(mrb, E_RUNTIME_ERROR, "path escapes TNK_PREFIX");
+        return -1;
+    }
+
+    if (access(resolved, mode) != 0) {
+        mrb_sys_fail(mrb, "access(resolved)");
+        return -1;
+    }
+
+    if (strlen(resolved) >= out_size) {
+        mrb_raise(mrb, E_RUNTIME_ERROR, "output buffer too small");
+        return -1;
+    }
+    strcpy(out, resolved);
+    return 0;
+}
+
 static mrb_value grab(mrb_state *mrb, mrb_value self)
 {
     mrb_int fd;
@@ -143,41 +188,15 @@ static bool utf8_next_cp(const char *s, size_t len, uint32_t *cp, size_t *consum
 static mrb_value
 gen_keymap(mrb_state *mrb, mrb_value self)
 {
-    char base_dir[PATH_MAX];
-    char script_path[PATH_MAX];
     char resolved[PATH_MAX];
-
-    // Resolve TNK_PREFIX to an absolute path
-    if (!realpath(TNK_PREFIX, base_dir)) {
-        mrb_sys_fail(mrb, "realpath(TNK_PREFIX)");
+    if (resolve_tnk_path(mrb,
+                        "share/totally-normal-keyboard/gen_keymap_h.sh",
+                        R_OK,
+                        resolved,
+                        sizeof(resolved)) != 0) {
+        return mrb_false_value();
     }
 
-    // Join base_dir with the fixed relative path
-    // This avoids format strings and makes the join explicit
-    if (snprintf(script_path, sizeof(script_path),
-                 "%s/share/totally-normal-keyboard/gen_keymap_h.sh",
-                 base_dir) >= (int)sizeof(script_path)) {
-        mrb_raise(mrb, E_RUNTIME_ERROR, "script path too long");
-    }
-
-    // Resolve the final script path
-    if (!realpath(script_path, resolved)) {
-        mrb_sys_fail(mrb, "realpath(script_path)");
-    }
-
-    // Ensure the resolved path starts with the trusted base_dir
-    size_t base_len = strlen(base_dir);
-    if (strncmp(resolved, base_dir, base_len) != 0 ||
-        (resolved[base_len] != '/' && resolved[base_len] != '\0')) {
-        mrb_raise(mrb, E_RUNTIME_ERROR, "script path escapes TNK_PREFIX");
-    }
-
-    // Check it's executable
-    if (access(resolved, X_OK) != 0) {
-        mrb_sys_fail(mrb, "access(script_path)");
-    }
-
-    // Fork/exec without a shell
     pid_t pid = fork();
     if (pid < 0) {
         mrb_sys_fail(mrb, "fork");
@@ -252,7 +271,7 @@ static int parse_plain_map_file(const char *path) {
     return 0;
 }
 
-int find_scancode_for_char(unsigned short ch) {
+static int find_scancode_for_char(unsigned short ch) {
     unsigned char target = (unsigned char)ch;
     for (int i = 0; i < NR_KEYS; i++) {
         if ((plain_map[i] & 0xFF) == target) {
@@ -266,21 +285,22 @@ static mrb_value
 load_keymap(mrb_state *mrb, mrb_value self)
 {
     if (keymap_loaded) {
-        return mrb_true_value(); // already loaded
+        return mrb_true_value();
     }
 
-    char map_path[PATH_MAX];
-    int len = snprintf(map_path, sizeof(map_path),
-                       "%s/share/totally-normal-keyboard/keymap.h",
-                       TNK_PREFIX);
-    if (len < 0 || (size_t)len >= sizeof(map_path)) {
-        mrb_raise(mrb, E_RUNTIME_ERROR, "keymap.h path too long");
+    char resolved[PATH_MAX];
+
+    if (resolve_tnk_path(mrb,
+                        "share/totally-normal-keyboard/keymap.h",
+                        R_OK,
+                        resolved,
+                        sizeof(resolved)) != 0) {
         return mrb_false_value();
     }
 
-    if (parse_plain_map_file(map_path) != 0) {
-        mrb_raisef(mrb, E_RUNTIME_ERROR, "failed to parse %S", mrb_str_new_cstr(mrb, map_path));
-        return mrb_false_value();
+    if (parse_plain_map_file(resolved) != 0) {
+        mrb_raisef(mrb, E_RUNTIME_ERROR,
+                   "failed to parse %S", mrb_str_new_cstr(mrb, resolved));
     }
 
     keymap_loaded = 1;
@@ -297,7 +317,6 @@ static mrb_value mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
 
   int arg_index = 0;
 
-  // Parse leading symbols as modifiers
   for (; arg_index < argc; arg_index++) {
     if (!mrb_symbol_p(argv[arg_index])) break;
 
@@ -319,7 +338,6 @@ static mrb_value mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
   int key_slot = 0;
   for (; arg_index < argc && key_slot < 6; arg_index++) {
     if (!mrb_string_p(argv[arg_index])) {
-      // ignore non-string, non-symbol args (or raise if you prefer)
       continue;
     }
 
@@ -340,11 +358,8 @@ static mrb_value mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
       report[2 + key_slot] = hid;
       key_slot++;
     }
-    // else: character has no scancode mapping; skip (or raise if desired)
   }
 
-  // Optional: if more characters remain (argc - arg_index > 0) and key_slot == 6,
-  // consider rollover error: set report[2] = 0x01 and zero the rest per HID spec.
 
   report[0] = modifier;
   return mrb_str_new(mrb, (const char *)report, sizeof(report));
@@ -353,6 +368,12 @@ static mrb_value mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
 void
 mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
 {
+#ifdef MRB_DEBUG
+    // Set $DEBUG = true
+    mrb_gv_set(mrb,
+               mrb_intern_lit(mrb, "$DEBUG"),
+               mrb_true_value());
+#endif
     struct RClass *tnk = mrb_define_class_id(mrb, MRB_SYM(Tnk), mrb->object_class);
     mrb_define_module_function_id(mrb, tnk, MRB_SYM(grab), grab, MRB_ARGS_REQ(1));
     mrb_define_module_function_id(mrb, tnk, MRB_SYM(ungrab), ungrab, MRB_ARGS_REQ(1));
