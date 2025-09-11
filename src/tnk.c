@@ -2,7 +2,7 @@
 #include <mruby/variable.h>
 #include <mruby/error.h>
 #include <linux/input.h>  // For EVIOCGRAB
-#include <unistd.h>       // For usleep
+#include <unistd.h>       // For usleep, access(), execv()
 #include <sys/ioctl.h>    // For ioctl()
 #include <mruby/presym.h>
 #include <stdbool.h>
@@ -16,7 +16,6 @@
 #include <errno.h>
 
 #include <libgen.h>   // for dirname()
-#include <unistd.h>   // for access(), execv()
 #undef P_ALL
 #undef P_PID
 #undef P_PGID
@@ -369,7 +368,6 @@ void
 mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
 {
 #ifdef MRB_DEBUG
-    // Set $DEBUG = true
     mrb_gv_set(mrb,
                mrb_intern_lit(mrb, "$DEBUG"),
                mrb_true_value());

@@ -24,7 +24,6 @@ if host_cpu == 'aarch64' && host_os =~ /linux/i
     conf.gembox 'full-core'
     conf.cc.flags  << '-Os' << '-flto' << '-ffunction-sections' << '-fdata-sections'
     conf.cxx.flags << '-Os' << '-std=c++20' << '-flto' << '-ffunction-sections' << '-fdata-sections'
-    conf.linker.flags << '-Wl,--gc-sections' << '-Wl,--threads=4' << '-flto'
     conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.gem File.expand_path(File.dirname(__FILE__))
