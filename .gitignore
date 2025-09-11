@@ -60,3 +60,5 @@ src/lookup_key_name.h
 src/keymap.h
 /mruby/
 scripts/keymap.kmap
+/.cache/
+/toolchains/

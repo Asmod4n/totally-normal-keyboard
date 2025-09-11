@@ -1,0 +1,3 @@
+[submodule "deps/musl-cross-make"]
+	path = deps/musl-cross-make
+	url = https://github.com/richfelker/musl-cross-make

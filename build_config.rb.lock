@@ -4,22 +4,11 @@ mruby:
   release_no: 30400
   git_commit: 797caf4fc50509def99a281658e6467a366d23bc
 builds:
-  debug:
+  aarch64-musl-gcc:
     https://github.com/Asmod4n/mruby-io_uring.git:
       url: https://github.com/Asmod4n/mruby-io_uring.git
       branch: main
-      commit: e6d538b7229c6fdbfffa58cf984b4351517f328a
-      version: 0.10.0
-    https://github.com/Asmod4n/mruby-c-ext-helpers.git:
-      url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
-      branch: master
-      commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
-      version: 0.2.0
-  release:
-    https://github.com/Asmod4n/mruby-io_uring.git:
-      url: https://github.com/Asmod4n/mruby-io_uring.git
-      branch: main
-      commit: e6d538b7229c6fdbfffa58cf984b4351517f328a
+      commit: 46d0d72b8459ae0d48b0b30ecf8785dc964ed9bd
       version: 0.10.0
     https://github.com/Asmod4n/mruby-c-ext-helpers.git:
       url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
