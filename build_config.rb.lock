@@ -37,6 +37,16 @@ builds:
       branch: master
       commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
       version: 0.2.0
+    https://github.com/Asmod4n/mruby-simplemsgpack.git:
+      url: https://github.com/Asmod4n/mruby-simplemsgpack.git
+      branch: master
+      commit: d8556920e89d42189db51aad2251d4e114da0b4e
+      version: '3.1'
+    https://github.com/Asmod4n/mruby-string-is-utf8.git:
+      url: https://github.com/Asmod4n/mruby-string-is-utf8.git
+      branch: master
+      commit: 4a52f0ffdd9bff15a445a9b80f07fd724020c78f
+      version: 0.0.0
   release:
     https://github.com/Asmod4n/mruby-io_uring.git:
       url: https://github.com/Asmod4n/mruby-io_uring.git
@@ -48,3 +58,13 @@ builds:
       branch: master
       commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
       version: 0.2.0
+    https://github.com/Asmod4n/mruby-simplemsgpack.git:
+      url: https://github.com/Asmod4n/mruby-simplemsgpack.git
+      branch: master
+      commit: d8556920e89d42189db51aad2251d4e114da0b4e
+      version: '3.1'
+    https://github.com/Asmod4n/mruby-string-is-utf8.git:
+      url: https://github.com/Asmod4n/mruby-string-is-utf8.git
+      branch: master
+      commit: 4a52f0ffdd9bff15a445a9b80f07fd724020c78f
+      version: 0.0.0

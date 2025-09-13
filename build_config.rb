@@ -16,6 +16,7 @@ if host_cpu == 'aarch64' && host_os =~ /linux/i
     conf.gem File.expand_path(File.dirname(__FILE__))
     conf.gem mgem: 'mruby-io-uring'
     conf.gem mgem: 'mruby-c-ext-helpers'
+    conf.gem mgem: 'mruby-simplemsgpack'
   end
 
   MRuby::Build.new('release') do |conf|
@@ -28,6 +29,7 @@ if host_cpu == 'aarch64' && host_os =~ /linux/i
     conf.gem File.expand_path(File.dirname(__FILE__))
     conf.gem mgem: 'mruby-io-uring'
     conf.gem mgem: 'mruby-c-ext-helpers'
+    conf.gem mgem: 'mruby-simplemsgpack'
   end
 else
   MRuby::CrossBuild.new('aarch64-musl-gcc') do |conf|
@@ -61,6 +63,7 @@ else
     conf.gem File.expand_path(File.dirname(__FILE__))
     conf.gem mgem: 'mruby-io-uring'
     conf.gem mgem: 'mruby-c-ext-helpers'
+    conf.gem mgem: 'mruby-simplemsgpack'
   end
 
   MRuby::CrossBuild.new('aarch64-musl-gcc-debug') do |conf|
@@ -86,5 +89,6 @@ else
     conf.gem File.expand_path(File.dirname(__FILE__))
     conf.gem mgem: 'mruby-io-uring'
     conf.gem mgem: 'mruby-c-ext-helpers'
+    conf.gem mgem: 'mruby-simplemsgpack'
   end
 end

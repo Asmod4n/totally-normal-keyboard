@@ -1,5 +1,15 @@
 #define _XOPEN_SOURCE 700
 #define _GNU_SOURCE
+
+#include <mruby/compile.h>
+#include <mruby/presym.h>
+#include <mruby/variable.h>
+#include <mruby/hash.h>
+#include <mruby/string.h>
+#include <mruby/error.h>
+#include <mruby/msgpack.h>
+#include "tnk_common.h"
+#include <ftw.h>
 #include <pwd.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -10,14 +20,6 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <mruby.h>
-#include <mruby/compile.h>
-#include <mruby/presym.h>
-#include <mruby/variable.h>
-#include <mruby/hash.h>
-#include <mruby/string.h>
-#include <mruby/error.h>
-#include <ftw.h>
-#include "tnk_common.h"
 
 static mrb_state *mrb = NULL;
 static mrb_state *user_mrb = NULL;
@@ -49,12 +51,10 @@ static int chown_cb(const char *fpath, const struct stat *sb,
 static int
 drop_privileges(const char *username) {
     char target_dir[PATH_MAX];
-    int len = snprintf(target_dir, sizeof(target_dir),
-             "%s/share/totally-normal-keyboard", TNK_PREFIX);
-    if (len < 0 || (size_t)len >= sizeof(target_dir)) {
-        fprintf(stderr, "path too long");
+    if (resolve_tnk_path(mrb, "share/totally-normal-keyboard", F_OK, target_dir, sizeof(target_dir)) != 0) {
         return -1;
     }
+
     struct passwd *pw = getpwnam(username);
     if (!pw) {
         fprintf(stderr, "User %s not found\n", username);
@@ -64,7 +64,6 @@ drop_privileges(const char *username) {
     target_uid = pw->pw_uid;
     target_gid = pw->pw_gid;
 
-    // Recursively chown the directory and its contents
     if (nftw(target_dir, chown_cb, 16, FTW_PHYS) != 0) {
         fprintf(stderr, "Failed to chown %s recursively\n", target_dir);
         return -1;
@@ -150,27 +149,28 @@ tnk_handle_hid_report_bridge(mrb_state *_mrb, mrb_value self)
 
     struct RClass *tnk_h     = mrb_class_get_id(user_mrb, MRB_SYM(Tnk));
     struct RClass *hotkeys_h = mrb_module_get_under_id(user_mrb, tnk_h, MRB_SYM(Hotkeys));
-    mrb_value hotkeys_hash   = mrb_cv_get(user_mrb, mrb_obj_value(hotkeys_h),
-                                          mrb_intern_lit(user_mrb, "@@hotkeys"));
+    mrb_value hotkeys_hash   = mrb_cv_get(user_mrb, mrb_obj_value(hotkeys_h), MRB_CVSYM(hotkeys));
     if (!mrb_hash_p(hotkeys_hash)) {
-        mrb_raise(user_mrb, E_TYPE_ERROR, "not a hash");
+        mrb_raise(_mrb, E_TYPE_ERROR, "not a hash");
     }
 
     mrb_value key_h = mrb_str_new(user_mrb, RSTRING_PTR(buf), RSTRING_LEN(buf));
     mrb_value blk = mrb_hash_get(user_mrb, hotkeys_hash, key_h);
-    if (!mrb_obj_is_kind_of(user_mrb, blk, user_mrb->proc_class)) {
+    if (mrb_type(blk) != MRB_TT_PROC) {
         return mrb_false_value();
     }
 
     mrb_bool err = FALSE;
-    (void)mrb_protect_error(user_mrb, tnk_yield_block_protected, &blk, &err);
-    mrb_gc_arena_restore(user_mrb, 0);
-
-    if (err || mrb_check_error(user_mrb)) {
+    mrb_value ret = mrb_protect_error(user_mrb, tnk_yield_block_protected, &blk, &err);
+    if (mrb_check_error(user_mrb) || err) {
         mrb_print_error(user_mrb);
+        mrb_gc_arena_restore(user_mrb, 0);
         return mrb_false_value();
     }
-    return mrb_true_value();
+
+    ret = mrb_msgpack_unpack(_mrb, mrb_msgpack_pack(user_mrb, ret));
+    mrb_gc_arena_restore(user_mrb, 0);
+    return ret;
 }
 
 int main(int argc, char **argv) {
@@ -241,7 +241,7 @@ int main(int argc, char **argv) {
         mrb_gc_arena_restore(mrb, 0);
         mrb_funcall_id(mrb, tnk, MRB_SYM(run), 0);
 
-        if (mrb->exc && errno != EINTR) {
+        if (mrb_check_error(mrb) && errno != EINTR) {
             mrb_print_error(mrb);
             _Exit(1);
         }
