@@ -12,15 +12,24 @@
 #include <mruby.h>
 #include <mruby/compile.h>
 #include <mruby/presym.h>
+#include <mruby/variable.h>
+#include <mruby/hash.h>
+#include <mruby/string.h>
+#include <mruby/error.h>
 #include <ftw.h>
-#include "tnk_path.h"
+#include "tnk_common.h"
 
 static mrb_state *mrb = NULL;
+static mrb_state *user_mrb = NULL;
 
 static void handle_signal(int sig) {
     if (mrb) {
         mrb_close(mrb);
         mrb = NULL;
+    }
+    if (user_mrb) {
+        mrb_close(user_mrb);
+        user_mrb = NULL;
     }
     exit(128 + sig);
 }
@@ -74,6 +83,98 @@ drop_privileges(const char *username) {
     return 0;
 }
 
+static void
+mrb_totally_normal_keyboard_user_init(void)
+{
+#ifdef MRB_DEBUG
+    mrb_gv_set(user_mrb,
+               mrb_intern_lit(user_mrb, "$DEBUG"),
+               mrb_true_value());
+#endif
+    struct RClass *tnk = mrb_define_class_id(user_mrb, MRB_SYM(Tnk), mrb->object_class);
+    struct RClass *hotkeys = mrb_define_module_under_id(user_mrb, tnk, MRB_SYM(Hotkeys));
+    mrb_define_module_function_id(user_mrb, hotkeys, MRB_SYM(generate_hid_report), mrb_generate_hid_report, MRB_ARGS_ANY());
+    if(user_mrb->exc) {
+        mrb_print_error(user_mrb);
+        _Exit(1);
+    }
+}
+
+static void
+mrb_tnk_load_hotkeys(void)
+{
+    static const char hotkeys_rb[] =
+    "class Tnk\n"
+    "  module Hotkeys\n"
+    "    @@hotkeys = {}\n"
+    "    def self.on_hotkey(*args, &blk)\n"
+    "      raise \"no block given\" unless blk\n"
+    "      report = generate_hid_report(*args)\n"
+    "      @@hotkeys[report] = blk\n"
+    "    end\n"
+    "  end\n"
+    "end\n";
+    mrb_load_nstring(user_mrb, hotkeys_rb, sizeof(hotkeys_rb) - 1);
+    if (mrb_check_error(user_mrb)) {
+        mrb_print_error(user_mrb);
+        _Exit(1);
+    }
+}
+
+static void
+mrb_tnk_user_mrb_init(void)
+{
+    if (user_mrb) {
+        abort();
+    }
+    user_mrb = mrb_open_core();
+    if(!user_mrb) {
+        perror("mrb_open_core()");
+        _Exit(1);
+    }
+    mrb_totally_normal_keyboard_user_init();
+    mrb_tnk_load_hotkeys();
+}
+
+static mrb_value
+tnk_yield_block_protected(mrb_state *vm, void *userdata)
+{
+    mrb_value blk = *(mrb_value *)userdata;
+    return mrb_yield_argv(vm, blk, 0, NULL);
+}
+
+static mrb_value
+tnk_handle_hid_report_bridge(mrb_state *_mrb, mrb_value self)
+{
+    mrb_value buf;
+    mrb_get_args(_mrb, "S", &buf);
+
+    struct RClass *tnk_h     = mrb_class_get_id(user_mrb, MRB_SYM(Tnk));
+    struct RClass *hotkeys_h = mrb_module_get_under_id(user_mrb, tnk_h, MRB_SYM(Hotkeys));
+    mrb_value hotkeys_hash   = mrb_cv_get(user_mrb, mrb_obj_value(hotkeys_h),
+                                          mrb_intern_lit(user_mrb, "@@hotkeys"));
+    if (!mrb_hash_p(hotkeys_hash)) {
+        mrb_raise(user_mrb, E_TYPE_ERROR, "not a hash");
+    }
+
+    mrb_value key_h = mrb_str_new(user_mrb, RSTRING_PTR(buf), RSTRING_LEN(buf));
+    mrb_value blk = mrb_hash_get(user_mrb, hotkeys_hash, key_h);
+    if (!mrb_obj_is_kind_of(user_mrb, blk, user_mrb->proc_class)) {
+        return mrb_false_value();
+    }
+
+    // Call block in user_mrb with mrb_protect_error to set up prev_jmp
+    mrb_bool err = FALSE;
+    mrb_value ret = mrb_protect_error(user_mrb, tnk_yield_block_protected, &blk, &err);
+    mrb_gc_arena_restore(user_mrb, 0);
+
+    if (err || mrb_check_error(user_mrb)) {
+        mrb_print_error(user_mrb);
+        return mrb_false_value();
+    }
+    return ret;
+}
+
 int main(int argc, char **argv) {
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -86,10 +187,10 @@ int main(int argc, char **argv) {
     }
 
     // Call Tnk.setup as root
-    mrb_value tnk = mrb_obj_value(mrb_class_get_id(mrb, MRB_SYM(Tnk)));
+    struct RClass *tnk_cls = mrb_class_get_id(mrb, MRB_SYM(Tnk));
+    mrb_value tnk = mrb_obj_value(tnk_cls);
     mrb_funcall_id(mrb, tnk, MRB_SYM(setup_root), 0);
-
-    if (mrb->exc) {
+    if (mrb_check_error(mrb)) {
         mrb_print_error(mrb);
         mrb_close(mrb);
         mrb = NULL;
@@ -111,11 +212,18 @@ int main(int argc, char **argv) {
         if (drop_privileges(drop_user) != 0) {
             _Exit(1);
         }
+        struct RClass *hotkeys = mrb_module_get_under_id(mrb, tnk_cls, MRB_SYM(Hotkeys));
+        mrb_define_module_function_id(mrb, hotkeys, MRB_SYM(handle_hid_report), tnk_handle_hid_report_bridge, MRB_ARGS_REQ(1));
         mrb_funcall_id(mrb, tnk, MRB_SYM(setup_user), 0);
+        if (mrb_check_error(mrb)) {
+            mrb_print_error(mrb);
+            _Exit(1);
+        }
+        mrb_tnk_user_mrb_init();
 
         char path[PATH_MAX];
         if (resolve_tnk_path(mrb,
-                            "share/totally-normal-keyboard/main.rb",
+                            "share/totally-normal-keyboard/user.rb",
                             R_OK,
                             path,
                             sizeof(path)) != 0) {
@@ -124,20 +232,17 @@ int main(int argc, char **argv) {
 
         FILE *fp = fopen(path, "r");
         if (!fp) {
-            perror("main.rb");
+            perror("user.rb");
             _Exit(1);
         }
-        mrb_load_file(mrb, fp);
+        mrb_load_file(user_mrb, fp);
         fclose(fp);
-        if (mrb->exc) {
-            mrb_print_error(mrb);
+        if (mrb_check_error(user_mrb)) {
+            mrb_print_error(user_mrb);
             _Exit(1);
         }
-        mrb_funcall_id(mrb, tnk, MRB_SYM(after_setup), 0);
-        if (mrb->exc) {
-            mrb_print_error(mrb);
-            _Exit(1);
-        }
+        mrb_gc_arena_restore(user_mrb, 0);
+        mrb_gc_arena_restore(mrb, 0);
         mrb_funcall_id(mrb, tnk, MRB_SYM(run), 0);
 
         if (mrb->exc && errno != EINTR) {
@@ -154,6 +259,11 @@ int main(int argc, char **argv) {
     // Now close VM as root (runs your finalizer/Tnk.close)
     mrb_close(mrb);
     mrb = NULL;
+    if (user_mrb) {
+        mrb_print_error(user_mrb);
+        mrb_close(user_mrb);
+        user_mrb = NULL;
+    }
 
     if (WIFEXITED(status))
         return WEXITSTATUS(status);

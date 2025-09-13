@@ -21,8 +21,8 @@ if host_cpu == 'aarch64' && host_os =~ /linux/i
   MRuby::Build.new('release') do |conf|
     conf.toolchain :gcc
     conf.gembox 'full-core'
-    conf.cc.flags  << '-Os' << '-flto' << '-ffunction-sections' << '-fdata-sections'
-    conf.cxx.flags << '-Os' << '-std=c++20' << '-flto' << '-ffunction-sections' << '-fdata-sections'
+    conf.cc.flags  << '-Os' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
+    conf.cxx.flags << '-Os' << '-std=c++20' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
     conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.gem File.expand_path(File.dirname(__FILE__))
@@ -43,8 +43,8 @@ else
     conf.cxx.command    = File.join(toolchain_bin_path, "#{TOOLCHAIN_TARGET}-g++")
     conf.linker.command = conf.cxx.command
 
-    conf.cc.flags  << '-Os' << '-flto' << '-ffunction-sections' << '-fdata-sections'
-    conf.cxx.flags << '-Os' << '-std=c++2a' << '-flto' << '-ffunction-sections' << '-fdata-sections'
+    conf.cc.flags  << '-Os' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
+    conf.cxx.flags << '-Os' << '-std=c++2a' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
 
     conf.linker.flags << "-static"
     conf.cc.flags     << "-static"

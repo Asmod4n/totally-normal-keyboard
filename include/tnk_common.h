@@ -1,5 +1,4 @@
-#ifndef TNK_PATH_H
-#define TNK_PATH_H
+#pragma once
 
 #include <stddef.h>
 #include <mruby.h>
@@ -14,10 +13,11 @@
  * @param out_size   Size of out buffer
  * @return 0 on success, -1 on error (mrb_raise called)
  */
-int resolve_tnk_path(mrb_state *mrb,
+MRB_API int resolve_tnk_path(mrb_state *mrb,
                      const char *rel_path,
                      int mode,
                      char *out,
                      size_t out_size);
 
-#endif
+MRB_API mrb_value
+mrb_generate_hid_report(mrb_state *mrb, mrb_value self);

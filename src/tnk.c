@@ -21,8 +21,10 @@
 #undef P_PGID
 #undef P_PIDFD
 #include <sys/wait.h>
+#include <mruby/hash.h>
 
-int resolve_tnk_path(mrb_state *mrb,
+MRB_API int
+resolve_tnk_path(mrb_state *mrb,
                      const char *rel_path,
                      int mode,
                      char *out,
@@ -229,7 +231,7 @@ static int parse_plain_map_file(const char *path) {
         return -1;
     }
 
-    char buf[1024];
+    char buf[4096];
     int found = 0;
     int idx = 0;
 
@@ -306,7 +308,8 @@ load_keymap(mrb_state *mrb, mrb_value self)
     return mrb_true_value();
 }
 
-static mrb_value mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
+MRB_API mrb_value
+mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
   mrb_value *argv;
   mrb_int argc;
   mrb_get_args(mrb, "*", &argv, &argc);
@@ -379,7 +382,7 @@ mrb_totally_normal_keyboard_gem_init(mrb_state *mrb)
     mrb_define_module_function_id(mrb, tnk, MRB_SYM(load_keymap), load_keymap, MRB_ARGS_NONE());
     mrb_define_const_id(mrb, tnk, MRB_SYM(PREFIX), mrb_str_new_lit(mrb, TNK_PREFIX));
     struct RClass *hotkeys = mrb_define_module_under_id(mrb, tnk, MRB_SYM(Hotkeys));
-    mrb_define_module_function_id(mrb, hotkeys, MRB_SYM(build_report), mrb_generate_hid_report, MRB_ARGS_ANY());
+    mrb_define_module_function_id(mrb, hotkeys, MRB_SYM(generate_hid_report), mrb_generate_hid_report, MRB_ARGS_ANY());
 }
 
 void mrb_totally_normal_keyboard_gem_final(mrb_state* mrb)

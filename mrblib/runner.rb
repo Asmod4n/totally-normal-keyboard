@@ -13,10 +13,6 @@ class Tnk
       runner.setup_user
     end
 
-    def after_setup
-      runner.after_setup
-    end
-
     def run
       runner.run
     end
