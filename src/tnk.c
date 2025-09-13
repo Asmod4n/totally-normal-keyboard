@@ -1,9 +1,9 @@
 #include <mruby.h>
 #include <mruby/variable.h>
 #include <mruby/error.h>
-#include <linux/input.h>  // For EVIOCGRAB
-#include <unistd.h>       // For usleep, access(), execv()
-#include <sys/ioctl.h>    // For ioctl()
+#include <linux/input.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
 #include <mruby/presym.h>
 #include <stdbool.h>
 #include <mruby/array.h>
@@ -14,8 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <libgen.h>
 
-#include <libgen.h>   // for dirname()
 #undef P_ALL
 #undef P_PID
 #undef P_PGID
@@ -93,7 +93,6 @@ static mrb_value ungrab(mrb_state *mrb, mrb_value self)
     return self;
 }
 
-// Modifier Bits
 #define MOD_LCTRL   0x01
 #define MOD_LSHIFT  0x02
 #define MOD_LALT    0x04
@@ -103,7 +102,6 @@ static mrb_value ungrab(mrb_state *mrb, mrb_value self)
 #define MOD_RALT    0x40
 #define MOD_RGUI    0x80
 
-// Vollständige US-HID Usage IDs für Linux-Scancodes (nicht belegte = 0x00)
 static const uint8_t scancode_to_hid[NR_KEYS] = {
   0x00,0x29,0x1E,0x1F,0x20,0x21,0x22,0x23,
   0x24,0x25,0x26,0x27,0x2D,0x2E,0x2A,0x2B,
@@ -131,8 +129,6 @@ static const uint8_t scancode_to_hid[NR_KEYS] = {
   0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
 };
 
-// Returns true on success, false on invalid/incomplete UTF-8.
-// Consumes exactly one codepoint from (s, len) and sets *cp and *consumed.
 static bool utf8_next_cp(const char *s, size_t len, uint32_t *cp, size_t *consumed) {
   if (len == 0) return false;
   const unsigned char c0 = (unsigned char)s[0];
@@ -143,7 +139,6 @@ static bool utf8_next_cp(const char *s, size_t len, uint32_t *cp, size_t *consum
     return true;
   }
 
-  // Determine expected length and masks; validate continuation bytes and overlongs.
   if ((c0 & 0xE0) == 0xC0) { // 2-byte
     if (len < 2) return false;
     const unsigned char c1 = (unsigned char)s[1];
@@ -244,16 +239,14 @@ static int parse_plain_map_file(const char *path) {
         }
 
         if (strchr(buf, '}')) {
-            break; // end of array
+            break;
         }
 
         char *p = buf;
         while (*p) {
-            // skip whitespace and commas
             while (*p == ' ' || *p == '\t' || *p == ',' || *p == '\n') p++;
             if (*p == '\0') break;
 
-            // parse number (hex or decimal)
             char *end;
             unsigned long val = strtoul(p, &end, 0);
             if (p != end && idx < NR_KEYS) {

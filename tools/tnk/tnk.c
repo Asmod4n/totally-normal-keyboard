@@ -39,10 +39,9 @@ static gid_t target_gid;
 
 static int chown_cb(const char *fpath, const struct stat *sb,
                     int typeflag, struct FTW *ftwbuf) {
-    // Change owner/group of each file/dir
     if (chown(fpath, target_uid, target_gid) != 0) {
         perror(fpath);
-        return -1; // stop on error
+        return -1;
     }
     return 0;
 }
@@ -163,16 +162,15 @@ tnk_handle_hid_report_bridge(mrb_state *_mrb, mrb_value self)
         return mrb_false_value();
     }
 
-    // Call block in user_mrb with mrb_protect_error to set up prev_jmp
     mrb_bool err = FALSE;
-    mrb_value ret = mrb_protect_error(user_mrb, tnk_yield_block_protected, &blk, &err);
+    (void)mrb_protect_error(user_mrb, tnk_yield_block_protected, &blk, &err);
     mrb_gc_arena_restore(user_mrb, 0);
 
     if (err || mrb_check_error(user_mrb)) {
         mrb_print_error(user_mrb);
         return mrb_false_value();
     }
-    return ret;
+    return mrb_true_value();
 }
 
 int main(int argc, char **argv) {
@@ -186,7 +184,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Call Tnk.setup as root
     struct RClass *tnk_cls = mrb_class_get_id(mrb, MRB_SYM(Tnk));
     mrb_value tnk = mrb_obj_value(tnk_cls);
     mrb_funcall_id(mrb, tnk, MRB_SYM(setup_root), 0);
@@ -208,7 +205,6 @@ int main(int argc, char **argv) {
     if (pid == 0) {
         const char *drop_user = getenv("TNK_DROP_USER");
         if (!drop_user) drop_user = "nobody";
-        // --- Child: drop privileges and run ---
         if (drop_privileges(drop_user) != 0) {
             _Exit(1);
         }
@@ -252,15 +248,12 @@ int main(int argc, char **argv) {
         _Exit(0);
     }
 
-    // --- Parent: still root, wait for child ---
     int status;
     waitpid(pid, &status, 0);
 
-    // Now close VM as root (runs your finalizer/Tnk.close)
     mrb_close(mrb);
     mrb = NULL;
     if (user_mrb) {
-        mrb_print_error(user_mrb);
         mrb_close(user_mrb);
         user_mrb = NULL;
     }

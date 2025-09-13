@@ -28,23 +28,26 @@ class Tnk
         mkdir_p("strings/0x409")
         file_write("strings/0x409/serialnumber",  "1234567890")
         file_write("strings/0x409/manufacturer",  "Hendrik")
-        file_write("strings/0x409/product",       "CDC-NCM Gadget")
+        file_write("strings/0x409/product",       "Totally Normal Keyboard")
 
         mkdir_p("configs/c.1/strings/0x409")
-        file_write("configs/c.1/strings/0x409/configuration", "CDC-NCM")
+        file_write("configs/c.1/strings/0x409/configuration", "tnk")
         file_write("configs/c.1/MaxPower", "250")
 
         mkdir_p("functions/mass_storage.usb0")
-        mkdir_p("/piusb")
-        unless File.exist?("/piusb/disk.img")
+        share_dir = File.join(Tnk::PREFIX, "share", "totally-normal-keyboard")
+        mkdir_p(share_dir)
+
+        disk_img = File.join(share_dir, "disk.img")
+        unless File.exist?(disk_img)
           debug_puts "📦 Creating disk.img..."
-          sh "dd if=/dev/zero of=/piusb/disk.img bs=1M count=128"
-          sh "mkfs.vfat /piusb/disk.img"
+          sh "dd if=/dev/zero of=#{disk_img} bs=1M count=128"
+          sh "mkfs.vfat #{disk_img}"
         else
           debug_puts "✅ disk.img exists – skipping creation."
         end
         file_write("functions/mass_storage.usb0/stall", "0")
-        file_write("functions/mass_storage.usb0/lun.0/file", "/piusb/disk.img")
+        file_write("functions/mass_storage.usb0/lun.0/file", disk_img)
         file_write("functions/mass_storage.usb0/lun.0/removable", "1")
         ln_s("functions/mass_storage.usb0", "configs/c.1/mass_storage.usb0")
 

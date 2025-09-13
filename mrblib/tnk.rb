@@ -23,7 +23,7 @@ class Tnk
     @io_uring = IO::Uring.new
     hid_proc = Proc.new do |hidraw, hidg|
       @io_uring.prep_read_fixed(hidraw) do |read_op|
-        debug_puts Hotkeys.handle_hid_report(read_op.buf)
+        Hotkeys.handle_hid_report(read_op.buf)
         @io_uring.prep_write_fixed(hidg, read_op) do |write_op|
           @io_uring.return_used_buffer(write_op)
         end
