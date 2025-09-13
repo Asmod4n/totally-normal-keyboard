@@ -14,9 +14,6 @@ if host_cpu == 'aarch64' && host_os =~ /linux/i
     conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.gem File.expand_path(File.dirname(__FILE__))
-    conf.gem mgem: 'mruby-io-uring'
-    conf.gem mgem: 'mruby-c-ext-helpers'
-    conf.gem mgem: 'mruby-simplemsgpack'
   end
 
   MRuby::Build.new('release') do |conf|
@@ -24,12 +21,12 @@ if host_cpu == 'aarch64' && host_os =~ /linux/i
     conf.gembox 'full-core'
     conf.cc.flags  << '-Os' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
     conf.cxx.flags << '-Os' << '-std=c++20' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
+    conf.cc.flags  << '-g0'
+    conf.cxx.flags << '-g0'
+    conf.linker.flags << '-Wl,--strip-debug'
     conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.gem File.expand_path(File.dirname(__FILE__))
-    conf.gem mgem: 'mruby-io-uring'
-    conf.gem mgem: 'mruby-c-ext-helpers'
-    conf.gem mgem: 'mruby-simplemsgpack'
   end
 else
   MRuby::CrossBuild.new('aarch64-musl-gcc') do |conf|
@@ -61,9 +58,6 @@ else
     conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.gem File.expand_path(File.dirname(__FILE__))
-    conf.gem mgem: 'mruby-io-uring'
-    conf.gem mgem: 'mruby-c-ext-helpers'
-    conf.gem mgem: 'mruby-simplemsgpack'
   end
 
   MRuby::CrossBuild.new('aarch64-musl-gcc-debug') do |conf|
@@ -87,8 +81,5 @@ else
     conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.gem File.expand_path(File.dirname(__FILE__))
-    conf.gem mgem: 'mruby-io-uring'
-    conf.gem mgem: 'mruby-c-ext-helpers'
-    conf.gem mgem: 'mruby-simplemsgpack'
   end
 end

@@ -2,41 +2,14 @@
 mruby:
   version: 3.4.0
   release_no: 30400
-  git_commit: 797caf4fc50509def99a281658e6467a366d23bc
+  git_commit: 437b47dca7ce8a2bf8a660dbbd920caa33c14794
 builds:
-  aarch64-musl-gcc:
-    https://github.com/Asmod4n/mruby-io_uring.git:
-      url: https://github.com/Asmod4n/mruby-io_uring.git
-      branch: main
-      commit: 46d0d72b8459ae0d48b0b30ecf8785dc964ed9bd
-      version: 0.10.0
-    https://github.com/Asmod4n/mruby-c-ext-helpers.git:
-      url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
-      branch: master
-      commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
-      version: 0.2.0
-  aarch64-musl-gcc-debug:
-    https://github.com/Asmod4n/mruby-io_uring.git:
-      url: https://github.com/Asmod4n/mruby-io_uring.git
-      branch: main
-      commit: 46d0d72b8459ae0d48b0b30ecf8785dc964ed9bd
-      version: 0.10.0
-    https://github.com/Asmod4n/mruby-c-ext-helpers.git:
-      url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
-      branch: master
-      commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
-      version: 0.2.0
   debug:
     https://github.com/Asmod4n/mruby-io_uring.git:
       url: https://github.com/Asmod4n/mruby-io_uring.git
       branch: main
       commit: 46d0d72b8459ae0d48b0b30ecf8785dc964ed9bd
       version: 0.10.0
-    https://github.com/Asmod4n/mruby-c-ext-helpers.git:
-      url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
-      branch: master
-      commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
-      version: 0.2.0
     https://github.com/Asmod4n/mruby-simplemsgpack.git:
       url: https://github.com/Asmod4n/mruby-simplemsgpack.git
       branch: master
@@ -47,17 +20,17 @@ builds:
       branch: master
       commit: 4a52f0ffdd9bff15a445a9b80f07fd724020c78f
       version: 0.0.0
+    https://github.com/Asmod4n/mruby-c-ext-helpers.git:
+      url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
+      branch: master
+      commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
+      version: 0.2.0
   release:
     https://github.com/Asmod4n/mruby-io_uring.git:
       url: https://github.com/Asmod4n/mruby-io_uring.git
       branch: main
       commit: 46d0d72b8459ae0d48b0b30ecf8785dc964ed9bd
       version: 0.10.0
-    https://github.com/Asmod4n/mruby-c-ext-helpers.git:
-      url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
-      branch: master
-      commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
-      version: 0.2.0
     https://github.com/Asmod4n/mruby-simplemsgpack.git:
       url: https://github.com/Asmod4n/mruby-simplemsgpack.git
       branch: master
@@ -68,3 +41,8 @@ builds:
       branch: master
       commit: 4a52f0ffdd9bff15a445a9b80f07fd724020c78f
       version: 0.0.0
+    https://github.com/Asmod4n/mruby-c-ext-helpers.git:
+      url: https://github.com/Asmod4n/mruby-c-ext-helpers.git
+      branch: master
+      commit: 83bc33fa88e87cfe34f05952532f16438ef3ed2c
+      version: 0.2.0

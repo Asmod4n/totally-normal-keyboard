@@ -38,14 +38,6 @@ class Tnk
     debug_puts "✅ setup complete"
   end
 
-  def self.on_setup(&block)
-    @@after_setup = block
-  end
-
-  def after_setup
-    @@after_setup&.call
-  end
-
   def run
     while true
       @io_uring.wait do |op|
