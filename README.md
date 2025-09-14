@@ -98,6 +98,10 @@ USB hotplug
 -----------
 You can hotplug usb hid devices, the app will restart automatically then.
 
+Limitations
+-----------
+Via testing it was found out you cant connect more than one usb hid device besides the build in keyboard before the kernel errors out and wont allow you to create more hid gadgets.
+
 
 TODO
 ====

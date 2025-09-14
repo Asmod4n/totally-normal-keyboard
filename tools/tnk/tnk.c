@@ -255,7 +255,7 @@ static int parse_plain_map_file(const char *path) {
 
     while (fgets(buf, sizeof(buf), fp)) {
         if (!found) {
-            if (strstr(buf, "unsigned short plain_map")) {
+            if (strstr(buf, "unsigned short plain_map[NR_KEYS] = {")) {
                 found = 1;
             }
             continue;

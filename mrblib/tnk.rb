@@ -22,7 +22,7 @@ class Tnk
     @io_uring = IO::Uring.new
     hid_proc = Proc.new do |hidraw, hidg|
       @io_uring.prep_read_fixed(hidraw) do |read_op|
-        debug_puts Hotkeys.handle_hid_report(read_op.buf)
+        Hotkeys.handle_hid_report(read_op.buf)
         @io_uring.prep_write_fixed(hidg, read_op) do |write_op|
           @io_uring.return_used_buffer(write_op)
         end
@@ -41,8 +41,12 @@ class Tnk
     while true
       @io_uring.wait do |op|
         if op.errno
-          warn op.inspect
-          raise op.errno
+          if op.errno.is_a?(Errno::EIO)
+            return
+          else
+            debug_puts op.inspect
+            raise op.errno
+          end
         end
       end
     end
@@ -51,9 +55,11 @@ class Tnk
   def close
     @hidraw_to_hidg.each do |hidraw_file, hidg_file|
       3.times { hidg_file.write(@empty_report[hidraw_file]) }
+      hidraw_file.close
+      hidg_file.close
     end
 
-    Hidg.stop
     @event_devices.each_value(&:close)
+    Hidg.stop
   end
 end
