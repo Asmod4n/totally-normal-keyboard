@@ -23,21 +23,7 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <signal.h>
-
-static mrb_state *mrb = NULL;
-static mrb_state *user_mrb = NULL;
-
-static void handle_signal(int sig) {
-    if (mrb) {
-        mrb_close(mrb);
-        mrb = NULL;
-    }
-    if (user_mrb) {
-        mrb_close(user_mrb);
-        user_mrb = NULL;
-    }
-    exit(128 + sig);
-}
+#include <sys/signalfd.h>
 
 static uid_t target_uid;
 static gid_t target_gid;
@@ -98,9 +84,9 @@ resolve_tnk_path(mrb_state *mrb,
 }
 
 static int
-drop_privileges(mrb_state *_mrb, const char *username) {
+drop_privileges(mrb_state *mrb, const char *username) {
     char target_dir[PATH_MAX];
-    if (resolve_tnk_path(_mrb, "share/totally-normal-keyboard", F_OK, target_dir, sizeof(target_dir)) != 0) {
+    if (resolve_tnk_path(mrb, "share/totally-normal-keyboard", F_OK, target_dir, sizeof(target_dir)) != 0) {
         return -1;
     }
 
@@ -219,10 +205,10 @@ static bool utf8_next_cp(const char *s, size_t len, uint32_t *cp, size_t *consum
 }
 
 static mrb_value
-gen_keymap(mrb_state *_mrb, mrb_value self)
+gen_keymap(mrb_state *mrb, mrb_value self)
 {
     char resolved[PATH_MAX];
-    if (resolve_tnk_path(_mrb,
+    if (resolve_tnk_path(mrb,
                         "share/totally-normal-keyboard/gen_keymap_h.sh",
                         R_OK,
                         resolved,
@@ -232,7 +218,7 @@ gen_keymap(mrb_state *_mrb, mrb_value self)
 
     pid_t pid = fork();
     if (pid < 0) {
-        mrb_sys_fail(_mrb, "fork");
+        mrb_sys_fail(mrb, "fork");
     } else if (pid == 0) {
         char *argv[] = { resolved, NULL };
         execv(resolved, argv);
@@ -241,10 +227,10 @@ gen_keymap(mrb_state *_mrb, mrb_value self)
 
     int status;
     if (waitpid(pid, &status, 0) < 0) {
-        mrb_sys_fail(_mrb, "waitpid");
+        mrb_sys_fail(mrb, "waitpid");
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        mrb_raisef(_mrb, E_RUNTIME_ERROR,
+        mrb_raisef(mrb, E_RUNTIME_ERROR,
                    "gen_keymap_h.sh failed (exit code %d)",
                    WEXITSTATUS(status));
     }
@@ -313,7 +299,7 @@ static int find_scancode_for_char(unsigned short ch) {
 }
 
 static mrb_value
-load_keymap(mrb_state *_mrb, mrb_value self)
+load_keymap(mrb_state *mrb, mrb_value self)
 {
     if (keymap_loaded) {
         return mrb_true_value();
@@ -321,7 +307,7 @@ load_keymap(mrb_state *_mrb, mrb_value self)
 
     char resolved[PATH_MAX];
 
-    if (resolve_tnk_path(_mrb,
+    if (resolve_tnk_path(mrb,
                         "share/totally-normal-keyboard/keymap.h",
                         R_OK,
                         resolved,
@@ -330,8 +316,8 @@ load_keymap(mrb_state *_mrb, mrb_value self)
     }
 
     if (parse_plain_map_file(resolved) != 0) {
-        mrb_raisef(_mrb, E_RUNTIME_ERROR,
-                   "failed to parse %S", mrb_str_new_cstr(_mrb, resolved));
+        mrb_raisef(mrb, E_RUNTIME_ERROR,
+                   "failed to parse %S", mrb_str_new_cstr(mrb, resolved));
     }
 
     keymap_loaded = 1;
@@ -339,10 +325,10 @@ load_keymap(mrb_state *_mrb, mrb_value self)
 }
 
 static mrb_value
-mrb_generate_hid_report(mrb_state *_mrb, mrb_value self) {
+mrb_generate_hid_report(mrb_state *mrb, mrb_value self) {
   mrb_value *argv;
   mrb_int argc;
-  mrb_get_args(_mrb, "*", &argv, &argc);
+  mrb_get_args(mrb, "*", &argv, &argc);
 
   uint8_t report[8] = {0}; // [0]=modifiers, [1]=reserved, [2..7]=keys
   uint8_t modifier = 0;
@@ -381,7 +367,7 @@ mrb_generate_hid_report(mrb_state *_mrb, mrb_value self) {
     uint32_t cp;
     size_t consumed;
     if (!utf8_next_cp(buf, len, &cp, &consumed)) {
-      mrb_raise(_mrb, E_ARGUMENT_ERROR, "invalid UTF-8 sequence");
+      mrb_raise(mrb, E_ARGUMENT_ERROR, "invalid UTF-8 sequence");
     }
 
     int sc = find_scancode_for_char((unsigned short)cp);
@@ -394,28 +380,30 @@ mrb_generate_hid_report(mrb_state *_mrb, mrb_value self) {
 
 
   report[0] = modifier;
-  return mrb_str_new(_mrb, (const char *)report, sizeof(report));
+  return mrb_str_new(mrb, (const char *)report, sizeof(report));
 }
 
-static void
-mrb_totally_normal_keyboard_user_init(mrb_state *_user_mrb)
+static bool
+mrb_totally_normal_keyboard_user_init(mrb_state *user_mrb)
 {
 #ifdef MRB_DEBUG
-    mrb_gv_set(_user_mrb,
+    mrb_gv_set(user_mrb,
                MRB_GVSYM(DEBUG),
                mrb_true_value());
 #endif
-    struct RClass *tnk = mrb_define_class_id(_user_mrb, MRB_SYM(Tnk), mrb->object_class);
-    struct RClass *hotkeys = mrb_define_module_under_id(_user_mrb, tnk, MRB_SYM(Hotkeys));
-    mrb_define_module_function_id(_user_mrb, hotkeys, MRB_SYM(generate_hid_report), mrb_generate_hid_report, MRB_ARGS_ANY());
-    if(mrb_check_error(_user_mrb)) {
-        mrb_print_error(_user_mrb);
-        _Exit(1);
+    struct RClass *tnk = mrb_define_class_id(user_mrb, MRB_SYM(Tnk), user_mrb->object_class);
+    struct RClass *hotkeys = mrb_define_module_under_id(user_mrb, tnk, MRB_SYM(Hotkeys));
+    mrb_define_module_function_id(user_mrb, hotkeys, MRB_SYM(generate_hid_report), mrb_generate_hid_report, MRB_ARGS_ANY());
+    if(user_mrb->exc) {
+        mrb_print_error(user_mrb);
+        mrb_clear_error(user_mrb);
+        return false;
     }
+    return true;
 }
 
-static void
-mrb_tnk_load_hotkeys(mrb_state *_user_mrb)
+static bool
+mrb_tnk_load_hotkeys(mrb_state *user_mrb)
 {
     static const char hotkeys_rb[] =
     "class Tnk\n"
@@ -428,25 +416,33 @@ mrb_tnk_load_hotkeys(mrb_state *_user_mrb)
     "    end\n"
     "  end\n"
     "end\n";
-    mrb_load_nstring(_user_mrb, hotkeys_rb, sizeof(hotkeys_rb));
-    if (mrb_check_error(_user_mrb)) {
-        mrb_print_error(_user_mrb);
-        _Exit(1);
+    mrb_load_nstring(user_mrb, hotkeys_rb, sizeof(hotkeys_rb));
+    if (user_mrb->exc) {
+        mrb_print_error(user_mrb);
+        mrb_clear_error(user_mrb);
+        return false;
     }
+    return true;
 }
 
 static mrb_state*
-mrb_tnk_user_mrb_init(mrb_state *_mrb)
+mrb_tnk_user_mrb_init(mrb_state *mrb)
 {
-    mrb_state *_user_mrb = mrb_open_core();
-    if(!_user_mrb) {
+    mrb_state *user_mrb = mrb_open_core();
+    if (!user_mrb) {
         perror("mrb_open_core()");
-        _Exit(1);
+        return NULL;
     }
-    mrb_totally_normal_keyboard_user_init(_user_mrb);
-    mrb_tnk_load_hotkeys(_user_mrb);
-    _mrb->ud = _user_mrb;
-    return _user_mrb;
+    if (!mrb_totally_normal_keyboard_user_init(user_mrb)) {
+        mrb_close(user_mrb);
+        return NULL;
+    }
+    if (!mrb_tnk_load_hotkeys(user_mrb)) {
+        mrb_close(user_mrb);
+        return NULL;
+    }
+    mrb->ud = user_mrb;
+    return user_mrb;
 }
 
 static mrb_value
@@ -457,45 +453,57 @@ tnk_yield_block_protected(mrb_state *vm, void *userdata)
 }
 
 static mrb_value
-tnk_handle_hid_report_bridge(mrb_state *_mrb, mrb_value self)
+tnk_handle_hid_report_bridge(mrb_state *mrb, mrb_value self)
 {
     mrb_value buf;
-    mrb_get_args(_mrb, "S", &buf);
+    mrb_get_args(mrb, "S", &buf);
 
-    mrb_state *_user_mrb = (mrb_state *) _mrb->ud;
+    mrb_state *user_mrb = (mrb_state *) mrb->ud;
 
-    struct RClass *tnk_h     = mrb_class_get_id(_user_mrb, MRB_SYM(Tnk));
-    struct RClass *hotkeys_h = mrb_module_get_under_id(_user_mrb, tnk_h, MRB_SYM(Hotkeys));
-    mrb_value hotkeys_hash   = mrb_cv_get(_user_mrb, mrb_obj_value(hotkeys_h), MRB_CVSYM(hotkeys));
+    struct RClass *tnk_h     = mrb_class_get_id(user_mrb, MRB_SYM(Tnk));
+    struct RClass *hotkeys_h = mrb_module_get_under_id(user_mrb, tnk_h, MRB_SYM(Hotkeys));
+    mrb_value hotkeys_hash   = mrb_cv_get(user_mrb, mrb_obj_value(hotkeys_h), MRB_CVSYM(hotkeys));
     if (!mrb_hash_p(hotkeys_hash)) {
-        mrb_raise(_mrb, E_TYPE_ERROR, "not a hash");
+        mrb_raise(mrb, E_TYPE_ERROR, "not a hash");
     }
 
-    mrb_value key_h = mrb_str_new(_user_mrb, RSTRING_PTR(buf), RSTRING_LEN(buf));
-    mrb_value blk = mrb_hash_get(_user_mrb, hotkeys_hash, key_h);
+    mrb_value key_h = mrb_str_new(user_mrb, RSTRING_PTR(buf), RSTRING_LEN(buf));
+    mrb_value blk = mrb_hash_get(user_mrb, hotkeys_hash, key_h);
     if (mrb_type(blk) != MRB_TT_PROC) {
         return mrb_false_value();
     }
 
     mrb_bool err = FALSE;
-    mrb_value ret = mrb_protect_error(_user_mrb, tnk_yield_block_protected, &blk, &err);
-    if (mrb_check_error(_user_mrb) || err) {
-        mrb_print_error(_user_mrb);
-        mrb_gc_arena_restore(_user_mrb, 0);
+    mrb_value ret = mrb_protect_error(user_mrb, tnk_yield_block_protected, &blk, &err);
+    if (user_mrb->exc || err) {
+        mrb_print_error(user_mrb);
+        mrb_clear_error(user_mrb);
+        mrb_gc_arena_restore(user_mrb, 0);
         return mrb_false_value();
     }
 
-    ret = mrb_msgpack_unpack(_mrb, mrb_msgpack_pack(_user_mrb, ret));
-    mrb_gc_arena_restore(_user_mrb, 0);
+    ret = mrb_msgpack_unpack(mrb, mrb_msgpack_pack(user_mrb, ret));
+    mrb_gc_arena_restore(user_mrb, 0);
     return ret;
 }
 
+static void block_signals(sigset_t *mask) {
+    sigemptyset(mask);
+    sigaddset(mask, SIGINT);
+    sigaddset(mask, SIGTERM);
+    sigaddset(mask, SIGCHLD);
+    if (sigprocmask(SIG_BLOCK, mask, NULL) == -1) {
+        perror("sigprocmask");
+        exit(1);
+    }
+}
+
 int main(int argc, char **argv) {
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
+    sigset_t mask;
+    block_signals(&mask);
 
     errno = 0;
-    mrb = mrb_open();
+    mrb_state *mrb = mrb_open();
     if (!mrb) {
         perror("mrb_open()");
         return 1;
@@ -504,12 +512,7 @@ int main(int argc, char **argv) {
     struct RClass *tnk_cls = mrb_class_get_id(mrb, MRB_SYM(Tnk));
     mrb_value tnk = mrb_obj_value(tnk_cls);
     mrb_funcall_id(mrb, tnk, MRB_SYM(setup_root), 0);
-    if (mrb_check_error(mrb)) {
-        mrb_print_error(mrb);
-        mrb_close(mrb);
-        mrb = NULL;
-        return 1;
-    }
+    mrb_gc_arena_restore(mrb, 0);
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -520,19 +523,24 @@ int main(int argc, char **argv) {
     }
 
     if (pid == 0) {
+        int rc = 0;
+        mrb_state *user_mrb = NULL;
+        sigprocmask(SIG_UNBLOCK, &mask, NULL);
+
         const char *drop_user = getenv("TNK_DROP_USER");
         if (!drop_user) drop_user = "nobody";
         if (drop_privileges(mrb, drop_user) != 0) {
-            _Exit(1);
+            rc = 1;
+            goto child_cleanup;
         }
         struct RClass *hotkeys = mrb_module_get_under_id(mrb, tnk_cls, MRB_SYM(Hotkeys));
         mrb_define_module_function_id(mrb, hotkeys, MRB_SYM(handle_hid_report), tnk_handle_hid_report_bridge, MRB_ARGS_REQ(1));
         mrb_define_module_function_id(mrb, tnk_cls, MRB_SYM(gen_keymap), gen_keymap, MRB_ARGS_NONE());
         mrb_define_module_function_id(mrb, tnk_cls, MRB_SYM(load_keymap), load_keymap, MRB_ARGS_NONE());
         mrb_funcall_id(mrb, tnk, MRB_SYM(setup_user), 0);
-        if (mrb_check_error(mrb)) {
-            mrb_print_error(mrb);
-            _Exit(1);
+        if (mrb->exc) {
+            rc = 1;
+            goto child_cleanup;
         }
         user_mrb = mrb_tnk_user_mrb_init(mrb);
 
@@ -542,44 +550,89 @@ int main(int argc, char **argv) {
                             R_OK,
                             path,
                             sizeof(path)) != 0) {
-            _Exit(1);
+            rc = 1;
+            goto child_cleanup;
         }
 
         FILE *fp = fopen(path, "r");
         if (!fp) {
             perror("user.rb");
-            _Exit(1);
+            rc = 1;
+            goto child_cleanup;
         }
         mrb_load_file(user_mrb, fp);
         fclose(fp);
-        if (mrb_check_error(user_mrb)) {
-            mrb_print_error(user_mrb);
-            _Exit(1);
+        if (user_mrb->exc) {
+            rc = 1;
+            goto child_cleanup;
         }
         mrb_gc_arena_restore(user_mrb, 0);
         mrb_gc_arena_restore(mrb, 0);
         mrb_funcall_id(mrb, tnk, MRB_SYM(run), 0);
 
-        if (mrb_check_error(mrb) && errno != EINTR) {
-            mrb_print_error(mrb);
-            _Exit(1);
+        if (mrb->exc && errno != EINTR) {
+            rc = 1;
         }
-        _Exit(0);
+child_cleanup:
+        if (mrb) {
+            mrb_print_error(mrb);
+            mrb_clear_error(mrb);
+            mrb_close(mrb);
+            mrb = NULL;
+        }
+        if (user_mrb) {
+            mrb_print_error(user_mrb);
+            mrb_clear_error(user_mrb);
+            mrb_close(user_mrb);
+            user_mrb = NULL;
+        }
+        _Exit(rc);
     }
 
-    int status;
-    waitpid(pid, &status, 0);
+    int sfd = signalfd(-1, &mask, SFD_CLOEXEC);
+    if (sfd == -1) {
+        perror("signalfd");
+        return 1;
+    }
+    int child_exited = 0;
+    int exit_code = 0;
+
+    for (;;) {
+        struct signalfd_siginfo si;
+        ssize_t res = read(sfd, &si, sizeof(si));
+        if (res != sizeof(si)) {
+            if (errno == EINTR) {
+                kill(pid, SIGINT);
+                break;
+            }
+            perror("read signalfd");
+            break;
+        }
+
+        if (si.ssi_signo == SIGCHLD) {
+            int status;
+            pid_t wpid;
+            // Reap all dead children
+            while ((wpid = waitpid(-1, &status, WNOHANG)) > 0) {
+                if (wpid == pid) {
+                    child_exited = 1;
+                    if (WIFEXITED(status))
+                        exit_code = WEXITSTATUS(status);
+                    else if (WIFSIGNALED(status))
+                        exit_code = 128 + WTERMSIG(status);
+                }
+            }
+        } else if (si.ssi_signo == SIGINT || si.ssi_signo == SIGTERM) {
+            // Forward signal to child
+            kill(pid, si.ssi_signo);
+        }
+
+        if (child_exited)
+            break;
+    }
 
     mrb_close(mrb);
     mrb = NULL;
-    if (user_mrb) {
-        mrb_close(user_mrb);
-        user_mrb = NULL;
-    }
 
-    if (WIFEXITED(status))
-        return WEXITSTATUS(status);
-    if (WIFSIGNALED(status))
-        return 128 + WTERMSIG(status);
-    return 1;
+    return exit_code;
 }

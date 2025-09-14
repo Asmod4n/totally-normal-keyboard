@@ -9,6 +9,7 @@ if host_cpu == 'aarch64' && host_os =~ /linux/i
     conf.toolchain :gcc
     conf.enable_debug
     conf.gembox 'full-core'
+    conf.enable_sanitizer "address,undefined,leak"
     conf.cc.flags  << '-Og' << '-g' << '-fno-omit-frame-pointer'
     conf.cxx.flags << '-Og' << '-g' << '-std=c++20' << '-fno-omit-frame-pointer'
     conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
