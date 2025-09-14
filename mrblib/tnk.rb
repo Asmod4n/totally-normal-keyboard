@@ -7,13 +7,12 @@ class Tnk
 
   def setup_root
     Hidg.setup
-    Tnk::Hidraw.list_hidraw_devices.each do |hidraw_device|
-      hidg_device = "/dev/hidg#{hidraw_device[-1]}"
-      hidraw_file = File.open(hidraw_device, 'rb')
-      hidg_file = File.open(hidg_device, 'wb')
+    Tnk::Hidg.hid_map.each do |hidraw_path, hidg_path|
+      hidraw_file = File.open(hidraw_path, 'rb')
+      hidg_file   = File.open(hidg_path, 'wb')
       @hidraw_to_hidg[hidraw_file] = hidg_file
-      @event_devices[hidraw_file] = Tnk::EventDevices.new(hidraw_device)
-      @empty_report[hidraw_file] = "\x00" * Tnk::Hidraw.calc_report_length_smart(hidraw_device)
+      @event_devices[hidraw_file]  = Tnk::EventDevices.new(hidraw_path)
+      @empty_report[hidraw_file]   = "\x00" * Tnk::Hidraw.calc_report_length_smart(hidraw_path)
     end
   end
 

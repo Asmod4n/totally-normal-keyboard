@@ -1,15 +1,5 @@
 class Tnk
   module Hidraw
-    # Liste aller /dev/hidraw*-Geräte
-    def self.list_hidraw_devices
-      sys_class = "/sys/class/hidraw"
-
-      Dir.entries(sys_class)
-        .select { |entry| entry.start_with?("hidraw") }
-        .sort
-        .map { |name| "/dev/#{name}" }
-    end
-
     def self.hidraw_to_by_id_names(hidraw_dev)
       sys_class   = "/sys/class/hidraw"
       hidraw_name = File.basename(hidraw_dev)

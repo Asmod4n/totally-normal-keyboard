@@ -11,7 +11,6 @@ static mrb_value grab(mrb_state *mrb, mrb_value self)
     mrb_int fd;
     mrb_get_args(mrb, "i", &fd);
     ioctl(fd, EVIOCGRAB, 0);
-    usleep(5000);
     if (ioctl(fd, EVIOCGRAB, 1) < 0) {
         mrb_sys_fail(mrb, "ioctl(EVIOCGRAB, 1)");
     }

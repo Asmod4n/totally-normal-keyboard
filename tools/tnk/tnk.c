@@ -503,8 +503,15 @@ int main(int argc, char **argv) {
     block_signals(&mask);
 
     errno = 0;
+    int sfd = signalfd(-1, &mask, SFD_CLOEXEC);
+    if (sfd == -1) {
+        perror("signalfd");
+        return 1;
+    }
+
     mrb_state *mrb = mrb_open();
     if (!mrb) {
+        close(sfd);
         perror("mrb_open()");
         return 1;
     }
@@ -512,11 +519,19 @@ int main(int argc, char **argv) {
     struct RClass *tnk_cls = mrb_class_get_id(mrb, MRB_SYM(Tnk));
     mrb_value tnk = mrb_obj_value(tnk_cls);
     mrb_funcall_id(mrb, tnk, MRB_SYM(setup_root), 0);
+    if (mrb->exc) {
+        mrb_print_error(mrb);
+        mrb_clear_error(mrb);
+        close(sfd);
+        mrb_close(mrb);
+        return 1;
+    }
     mrb_gc_arena_restore(mrb, 0);
 
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork");
+        close(sfd);
         mrb_close(mrb);
         mrb = NULL;
         return 1;
@@ -543,6 +558,10 @@ int main(int argc, char **argv) {
             goto child_cleanup;
         }
         user_mrb = mrb_tnk_user_mrb_init(mrb);
+        if (user_mrb == NULL) {
+            rc = 1;
+            goto child_cleanup;
+        }
 
         char path[PATH_MAX];
         if (resolve_tnk_path(mrb,
@@ -570,30 +589,25 @@ int main(int argc, char **argv) {
         mrb_gc_arena_restore(mrb, 0);
         mrb_funcall_id(mrb, tnk, MRB_SYM(run), 0);
 
+child_cleanup:
         if (mrb->exc && errno != EINTR) {
             rc = 1;
-        }
-child_cleanup:
-        if (mrb) {
             mrb_print_error(mrb);
-            mrb_clear_error(mrb);
-            mrb_close(mrb);
-            mrb = NULL;
         }
+        mrb_clear_error(mrb);
+        mrb_close(mrb);
+        mrb = NULL;
         if (user_mrb) {
-            mrb_print_error(user_mrb);
-            mrb_clear_error(user_mrb);
+            if (user_mrb->exc) {
+                mrb_print_error(user_mrb);
+                mrb_clear_error(user_mrb);
+            }
             mrb_close(user_mrb);
             user_mrb = NULL;
         }
         _Exit(rc);
     }
 
-    int sfd = signalfd(-1, &mask, SFD_CLOEXEC);
-    if (sfd == -1) {
-        perror("signalfd");
-        return 1;
-    }
     int child_exited = 0;
     int exit_code = 0;
 
@@ -601,10 +615,7 @@ child_cleanup:
         struct signalfd_siginfo si;
         ssize_t res = read(sfd, &si, sizeof(si));
         if (res != sizeof(si)) {
-            if (errno == EINTR) {
-                kill(pid, SIGINT);
-                break;
-            }
+            if (errno == EINTR) continue;
             perror("read signalfd");
             break;
         }

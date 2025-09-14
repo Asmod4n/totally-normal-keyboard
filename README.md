@@ -32,6 +32,8 @@ This has only been tested to run on Raspberry pi os (aka Debian), it might work 
 
 here is a list of what packages you need for debian
 ```
+- udev
+- systemd
 - ruby
 - rake
 - console-setup
@@ -91,6 +93,10 @@ Barebones hotkey support
 ------------------------
 At the moment we got barebones hotkey registering and code running when set hotkey was pressed.
 take a look at ```share/user.rb``` this is running a mruby core vm with no gems loaded, its currently being explored how to turn that into something usefull.
+
+USB hotplug
+-----------
+You can hotplug usb hid devices, the app will restart automatically then.
 
 
 TODO

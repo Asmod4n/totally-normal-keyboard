@@ -1,10 +1,16 @@
 class Tnk
   module Hidg
     extend self
+    @@hid_map = []
 
     GADGET = "/sys/kernel/config/usb_gadget/tnk"
 
+    def hid_map
+      @@hid_map
+    end
+
     def setup
+      @@hid_map.clear
       if File.exist?("#{GADGET}/UDC")
         udc = read_first_line("#{GADGET}/UDC")
         if udc.delete(" \t\r\n\f\v") != ""
@@ -15,7 +21,6 @@ class Tnk
       end
 
       sh "modprobe -r dwc2"
-      sleep 1
       sh "modprobe dwc2"
       sh "modprobe libcomposite"
       mkdir_p(GADGET)
@@ -70,13 +75,15 @@ class Tnk
             File.open(hidraw, "rb") { |inp| out.write(inp.read) }
           end
           ln_s(func_dir, "configs/c.1/hid.usb#{hid_index}")
+          hidraw_name = File.basename(File.dirname(File.dirname(hidraw)))
+          hidraw_dev  = "/dev/#{hidraw_name}"
+          @@hid_map << [hidraw_dev, "/dev/hidg#{hid_index}"]
           hid_index += 1
         end
 
         udc_name = sh_capture("ls /sys/class/udc").split("\n").first
         file_write("UDC", udc_name)
 
-        sleep 2
         unless sh_silent("ip link set usb0 up") || sh_silent("ifconfig usb0 up")
           debug_puts "⚠️  Could not bring up usb0 (ip/ifconfig failed)"
         end
@@ -88,7 +95,6 @@ class Tnk
       debug_puts "🛑 Cleaning up USB gadget tnk..."
       if File.exist?("#{GADGET}/UDC")
         file_write("#{GADGET}/UDC", "")
-        sleep 1
       end
 
       unless File.directory?(GADGET)
