@@ -24,6 +24,75 @@ I've always wanted to carry around a secure password manager in a pocket i can j
 Or paste something into a device which has no clipboard of its own, like in a BIOS or during OS Setup
 
 
+build deps
+----------
+To build this you need to have ruby installed and the gcc toolchain and linux headers and some other packages, see below.
+You also need to run this on linux, an attempt has been made to build this on macOS with musl-cross but it would require forking and patching too many tools and libs so it was abandoned.
+This has only been tested to run on Raspberry pi os (aka Debian), it might work on other distros but you are on your own there.
+
+here is a list of what packages you need for debian
+```
+- ruby
+- rake
+- console-setup
+- kbd
+- build-essential
+- linux-headers-$(uname -r)
+```
+
+You also need to run
+```sh
+sudo raspi-config
+```
+
+and set a correct keyboard layout and keymap, you find that under option 5.
+
+getting the source
+------------------
+```sh
+git clone --recurse-submodules https://github.com/Asmod4n/totally-normal-keyboard
+```
+
+compiling
+---------
+```sh
+cd totally-normal-keyboard
+rake
+```
+
+installing
+----------
+```sh
+sudo rake install
+```
+
+running
+-------
+```sh
+sudo service tnk start
+```
+
+enabling it to run at boot
+--------------------------
+```sh
+sudo systemctl enable tnk.service
+```
+
+uninstalling
+------------
+```sh
+sudo rake uninstall
+```
+
+You can run all rake commands with a PREFIX env var, which will set the app up to run and install from that prefix.
+When you start this app you can set an env var named TNK_DROP_USER to which user to drop to after the setup phase as root is done.
+
+Barebones hotkey support
+------------------------
+At the moment we got barebones hotkey registering and code running when set hotkey was pressed.
+take a look at ```share/user.rb``` this is running a mruby core vm with no gems loaded, its currently being explored how to turn that into something usefull.
+
+
 TODO
 ====
 - ~~forward all USB Hid devices to the conntected host~~
@@ -34,13 +103,14 @@ TODO
 - ~~use msgpack to communicate with the isolated vm~~
 - ~~write install and uninstall tasks~~
 - ~~create a systemd unit file~~
+- make hotkey mapping usefull
 - learn QT
 - learn Windows GUI Programming
 - write host side app for Windows
 - learn macOS GUI Programmming
 - write host side app for macOS
 - implement a encrypted clipboard manager
-. implement a encrypted password manager
+- implement a encrypted password manager
 - create a ecosystem for plugins which run on the host side and communicate with a sandboxed vm on the gadget side
 
 LICENSE
