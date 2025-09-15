@@ -320,73 +320,49 @@ gen_keymap(mrb_state *mrb, mrb_value self)
         if (pid_ckb == -1) _exit(127);
 
         if (pid_ckb == 0) {
-            /* ckbcomp */
+            /* ckbcomp child */
             close(mid[0]);
             dup2(mid[1], STDOUT_FILENO);
             close(mid[1]);
 
-            /* Build argv for execl with correct flags */
             const char *model_arg   = RSTRING_CSTR(mrb, xkbmodel);
             const char *layout_arg  = RSTRING_CSTR(mrb, xkblayout);
             const char *variant_arg = RSTRING_CSTR(mrb, xkbvariant);
             const char *options_arg = RSTRING_CSTR(mrb, xkboptions);
 
-            /* If options contain commas, split them */
-            char *opts_copy = NULL;
-            char *opt1 = NULL, *opt2 = NULL;
+            const char *optv[16];
+            int optc = 0;
             if (options_arg[0] != '\0') {
-                opts_copy = strdup(options_arg);
-                char *comma = strchr(opts_copy, ',');
-                if (comma) {
+                const char *p = options_arg;
+                while (p && *p && optc < (int)(sizeof(optv)/sizeof(optv[0]) - 1)) {
+                    optv[optc++] = p;
+                    char *comma = strchr(p, ',');
+                    if (!comma) break;
                     *comma = '\0';
-                    opt1 = opts_copy;
-                    opt2 = comma + 1;
-                } else {
-                    opt1 = opts_copy;
+                    p = comma + 1;
+                    while (*p == ' ' || *p == '\t') p++;
                 }
             }
+            optv[optc] = NULL;
 
-            if (variant_arg[0] != '\0' && opt1 && opt2) {
-                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
-                      "-model",   model_arg,
-                      "-layout",  layout_arg,
-                      "-variant", variant_arg,
-                      "-option",  opt1,
-                      "-option",  opt2,
-                      (char *)NULL);
-            } else if (variant_arg[0] != '\0' && opt1) {
-                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
-                      "-model",   model_arg,
-                      "-layout",  layout_arg,
-                      "-variant", variant_arg,
-                      "-option",  opt1,
-                      (char *)NULL);
-            } else if (variant_arg[0] != '\0') {
-                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
-                      "-model",   model_arg,
-                      "-layout",  layout_arg,
-                      "-variant", variant_arg,
-                      (char *)NULL);
-            } else if (opt1 && opt2) {
-                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
-                      "-model",   model_arg,
-                      "-layout",  layout_arg,
-                      "-option",  opt1,
-                      "-option",  opt2,
-                      (char *)NULL);
-            } else if (opt1) {
-                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
-                      "-model",   model_arg,
-                      "-layout",  layout_arg,
-                      "-option",  opt1,
-                      (char *)NULL);
-            } else {
-                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
-                      "-model",   model_arg,
-                      "-layout",  layout_arg,
-                      (char *)NULL);
+            const char *argv[64];
+            int argc = 0;
+            #define ADD_ARG(s) do { if (argc < (int)(sizeof(argv)/sizeof(argv[0]) - 1)) argv[argc++] = (s); } while (0)
+
+            ADD_ARG("ckbcomp");
+            ADD_ARG("-compact");
+            if (model_arg[0])   { ADD_ARG("-model");   ADD_ARG(model_arg); }
+            if (layout_arg[0])  { ADD_ARG("-layout");  ADD_ARG(layout_arg); }
+            if (variant_arg[0]) { ADD_ARG("-variant"); ADD_ARG(variant_arg); }
+            for (int i = 0; i < optc; i++) {
+                ADD_ARG("-option");
+                ADD_ARG(optv[i]);
             }
+            argv[argc] = NULL;
+
+            execv("/usr/bin/ckbcomp", (char * const *)argv);
             _exit(127);
+            #undef ADD_ARG
         }
 
         /* loadkeys */
