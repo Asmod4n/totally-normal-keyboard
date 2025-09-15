@@ -100,5 +100,4 @@ task :uninstall do
   sh 'udevadm trigger --subsystem-match=hidraw'
 end
 
-
 task :default => :test

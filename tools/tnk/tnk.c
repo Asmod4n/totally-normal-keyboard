@@ -1,4 +1,3 @@
-#include "mruby/value.h"
 #define _XOPEN_SOURCE 700
 #define _GNU_SOURCE
 
@@ -61,7 +60,14 @@ resolve_tnk_path(mrb_state *mrb,
     exe_path[len] = '\0';
 
     // Copy to base_dir because dirname() may modify its argument
-    stpncpy(base_dir, exe_path, sizeof(base_dir));
+    char *end = stpncpy(base_dir, exe_path, sizeof(base_dir));
+    if (end == base_dir + sizeof(base_dir)) {
+        // No NUL written — source length >= buffer size
+        base_dir[sizeof(base_dir) - 1] = '\0';
+        // Handle truncation here if needed
+    }
+
+
 
     if (!realpath(dirname(base_dir), base_dir)) {
         mrb_sys_fail(mrb, "realpath(base_dir)");
@@ -253,30 +259,113 @@ parse_plain_map_stream(FILE *fp) {
     }
 }
 
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <errno.h>
+
 static mrb_value
 gen_keymap(mrb_state *mrb, mrb_value self)
 {
-    if (keymap_loaded) return  mrb_true_value();
-    const char *cmd =
-        "bash -euo pipefail -c '"
-        "source /etc/default/keyboard; "
-        "/usr/bin/ckbcomp -compact \"$XKBLAYOUT\" \"$XKBVARIANT\" \"$XKBMODEL\" \"$XKBOPTIONS\" "
-        "| /usr/bin/loadkeys -u --mktable"
-        "'";
+    if (keymap_loaded) return mrb_true_value();
 
-    FILE *fp = popen(cmd, "r");
-    if (!fp) {
-        mrb_sys_fail(mrb, "popen");
+    mrb_value xkbmodel   = mrb_nil_value();
+    mrb_value xkblayout  = mrb_nil_value();
+    mrb_value xkbvariant = mrb_nil_value();
+    mrb_value xkboptions = mrb_nil_value();
+
+    // Parse /etc/default/keyboard
+    FILE *kf = fopen("/etc/default/keyboard", "r");
+    if (!kf) mrb_sys_fail(mrb, "fopen /etc/default/keyboard");
+
+    char line[512];
+    while (fgets(line, sizeof(line), kf)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\0' || *p == '\n') continue;
+
+        char *eq = strchr(p, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *name = p;
+        char *val = eq + 1;
+
+        // strip newline
+        size_t len = strlen(val);
+        while (len && (val[len-1] == '\n' || val[len-1] == '\r')) val[--len] = '\0';
+
+        // strip quotes
+        if ((val[0] == '"' && val[len-1] == '"') || (val[0] == '\'' && val[len-1] == '\'')) {
+            val[len-1] = '\0';
+            val++;
+        }
+
+        if (strcmp(name, "XKBMODEL") == 0)   xkbmodel   = mrb_str_new_cstr(mrb, val);
+        else if (strcmp(name, "XKBLAYOUT") == 0)  xkblayout  = mrb_str_new_cstr(mrb, val);
+        else if (strcmp(name, "XKBVARIANT") == 0) xkbvariant = mrb_str_new_cstr(mrb, val);
+        else if (strcmp(name, "XKBOPTIONS") == 0) xkboptions = mrb_str_new_cstr(mrb, val);
+    }
+    fclose(kf);
+
+    // Fail fast if missing
+    if (mrb_nil_p(xkbmodel) || mrb_nil_p(xkblayout) ||
+        mrb_nil_p(xkbvariant) || mrb_nil_p(xkboptions)) {
+        mrb_raise(mrb, E_RUNTIME_ERROR, "missing required keyboard config");
     }
 
-    parse_plain_map_stream(fp);
+    // Pipe: ckbcomp -> loadkeys
+    int pipefd[2];
+    if (pipe(pipefd) == -1) mrb_sys_fail(mrb, "pipe");
 
-    int rc = pclose(fp);
-    if (rc == -1) {
-        mrb_sys_fail(mrb, "pclose");
-    } else if (!WIFEXITED(rc) || WEXITSTATUS(rc) != 0) {
+    pid_t pid = fork();
+    if (pid == -1) mrb_sys_fail(mrb, "fork");
+
+    if (pid == 0) {
+        // child: run ckbcomp | loadkeys, output to stdout (pipefd[1])
+        int mid[2];
+        if (pipe(mid) == -1) _exit(127);
+
+        pid_t pid_ckb = fork();
+        if (pid_ckb == -1) _exit(127);
+
+        if (pid_ckb == 0) {
+            // ckbcomp
+            close(mid[0]);
+            dup2(mid[1], STDOUT_FILENO);
+            close(mid[1]);
+            execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
+                  RSTRING_CSTR(mrb, xkblayout),
+                  RSTRING_CSTR(mrb, xkbvariant),
+                  RSTRING_CSTR(mrb, xkbmodel),
+                  RSTRING_CSTR(mrb, xkboptions),
+                  (char *)NULL);
+            _exit(127);
+        }
+
+        // loadkeys
+        close(mid[1]);
+        dup2(mid[0], STDIN_FILENO);
+        close(mid[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execl("/usr/bin/loadkeys", "loadkeys", "-u", "--mktable", (char *)NULL);
+        _exit(127);
+    }
+
+    // parent: capture output
+    close(pipefd[1]);
+    FILE *fp = fdopen(pipefd[0], "r");
+    if (!fp) mrb_sys_fail(mrb, "fdopen");
+
+    parse_plain_map_stream(fp);
+    fclose(fp);
+
+    int status;
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         mrb_raisef(mrb, E_RUNTIME_ERROR,
-                   "pipeline failed (exit code %d)", WEXITSTATUS(rc));
+                   "pipeline failed (exit code %d)", WEXITSTATUS(status));
     }
 
     keymap_loaded = true;
