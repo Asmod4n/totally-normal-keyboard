@@ -113,6 +113,7 @@ TODO
 - ~~use msgpack to communicate with the isolated vm~~
 - ~~write install and uninstall tasks~~
 - ~~create a systemd unit file~~
+- ~~USB hotplug support~~
 - make hotkey mapping usefull
 - learn QT
 - learn Windows GUI Programming
