@@ -39,96 +39,83 @@ static int chown_cb(const char *fpath, const struct stat *sb,
     return 0;
 }
 
-static int
+static mrb_value
 resolve_tnk_path(mrb_state *mrb,
                  const char *rel_path,
-                 int mode,
-                 char *out,
-                 size_t out_size)
+                 int mode)
 {
-    char exe_path[PATH_MAX] = {0};
-    char base_dir[PATH_MAX] = {0};
-    char joined[PATH_MAX] = {0};
-    char resolved[PATH_MAX] = {0};
+  /* One mutable mruby string buffer for the whole process */
+  mrb_value path = mrb_str_new(mrb, NULL, PATH_MAX);
 
-    // Get absolute path to current executable
-    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-    if (len < 0) {
-        mrb_sys_fail(mrb, "readlink(/proc/self/exe)");
-        return -1;
-    }
-    exe_path[len] = '\0';
+  /* Step 1: readlink into buffer */
+  ssize_t len = readlink("/proc/self/exe",
+                         RSTRING_PTR(path),
+                         RSTRING_CAPA(path) - 1);
+  if (len < 0) {
+    mrb_sys_fail(mrb, "readlink(/proc/self/exe)");
+  }
+  RSTRING_PTR(path)[len] = '\0';
 
-    // Copy to base_dir because dirname() may modify its argument
-    char *end = stpncpy(base_dir, exe_path, sizeof(base_dir));
-    if (end == base_dir + sizeof(base_dir)) {
-        // No NUL written — source length >= buffer size
-        base_dir[sizeof(base_dir) - 1] = '\0';
-        // Handle truncation here if needed
-    }
+  /* Step 2: dirname in place */
+  dirname(RSTRING_PTR(path));
 
+  /* Step 3: realpath(base_dir) in place */
+  if (!realpath(RSTRING_PTR(path), RSTRING_PTR(path))) {
+    mrb_sys_fail(mrb, "realpath(base_dir)");
+  }
 
+  /* Step 4: append "/" + rel_path */
+  mrb_str_cat_lit(mrb, path, "/");
+  mrb_str_cat_cstr(mrb, path, rel_path);
 
-    if (!realpath(dirname(base_dir), base_dir)) {
-        mrb_sys_fail(mrb, "realpath(base_dir)");
-        return -1;
-    }
+  /* Step 5: realpath(joined) in place */
+  if (!realpath(RSTRING_PTR(path), RSTRING_PTR(path))) {
+    mrb_sys_fail(mrb, "realpath(joined)");
+  }
+  mrb_str_resize(mrb, path, strlen(RSTRING_PTR(path)));
 
-    // Join base_dir and rel_path
-    if (snprintf(joined, sizeof(joined), "%s/%s", base_dir, rel_path) >= (int)sizeof(joined)) {
-        mrb_raise(mrb, E_RUNTIME_ERROR, "path too long");
-        return -1;
-    }
+  /* Step 6: access check */
+  if (access(RSTRING_PTR(path), mode) != 0) {
+    mrb_sys_fail(mrb, "access(resolved)");
+  }
 
-    if (!realpath(joined, resolved)) {
-        mrb_sys_fail(mrb, "realpath(joined)");
-        return -1;
-    }
-
-    if (access(resolved, mode) != 0) {
-        mrb_sys_fail(mrb, "access(resolved)");
-        return -1;
-    }
-
-    if (strlen(resolved) >= out_size) {
-        mrb_raise(mrb, E_RUNTIME_ERROR, "output buffer too small");
-        return -1;
-    }
-    strcpy(out, resolved);
-    return 0;
+  /* Done — path now holds the final resolved path */
+  return path;
 }
 
-static int
-drop_privileges(mrb_state *mrb, const char *username) {
-    char target_dir[PATH_MAX];
-    if (resolve_tnk_path(mrb, "../share/totally-normal-keyboard", F_OK, target_dir, sizeof(target_dir)) != 0) {
-        return -1;
-    }
+static mrb_value
+drop_privileges(mrb_state *mrb, const char *username)
+{
+  mrb_value target_dir = resolve_tnk_path(mrb, "../share/totally-normal-keyboard", F_OK);
 
-    struct passwd *pw = getpwnam(username);
-    if (!pw) {
-        fprintf(stderr, "User %s not found\n", username);
-        return -1;
-    }
+  struct passwd *pw = getpwnam(username);
+  if (!pw) {
+    mrb_raisef(mrb, E_RUNTIME_ERROR, "user '%S' not found", mrb_str_new_cstr(mrb, username));
+  }
 
-    target_uid = pw->pw_uid;
-    target_gid = pw->pw_gid;
+  target_uid = pw->pw_uid;
+  target_gid = pw->pw_gid;
 
-    if (nftw(target_dir, chown_cb, 16, FTW_PHYS) != 0) {
-        fprintf(stderr, "Failed to chown %s recursively\n", target_dir);
-        return -1;
-    }
+  if (nftw(RSTRING_CSTR(mrb, target_dir), chown_cb, 16, FTW_PHYS) != 0) {
+    mrb_raisef(mrb, E_RUNTIME_ERROR, "failed to chown '%S' recursively", target_dir);
+  }
 
-    if (initgroups(pw->pw_name, pw->pw_gid) != 0) { perror("initgroups"); return -1; }
-    if (setgid(pw->pw_gid) != 0) { perror("setgid"); return -1; }
-    if (setuid(pw->pw_uid) != 0) { perror("setuid"); return -1; }
+  if (initgroups(pw->pw_name, pw->pw_gid) != 0) {
+    mrb_sys_fail(mrb, "initgroups");
+  }
+  if (setgid(pw->pw_gid) != 0) {
+    mrb_sys_fail(mrb, "setgid");
+  }
+  if (setuid(pw->pw_uid) != 0) {
+    mrb_sys_fail(mrb, "setuid");
+  }
 
-    if (setuid(0) != -1) {
-        fprintf(stderr, "Privilege drop failed: still root!\n");
-        return -1;
-    }
+  /* Verify privilege drop */
+  if (setuid(0) != -1) {
+    mrb_raise(mrb, E_RUNTIME_ERROR, "privilege drop failed: still root");
+  }
 
-    return 0;
+  return mrb_nil_value();
 }
 
 #define MOD_LCTRL   0x01
@@ -259,141 +246,146 @@ parse_plain_map_stream(FILE *fp) {
     }
 }
 
-
 static mrb_value
 gen_keymap(mrb_state *mrb, mrb_value self)
 {
-    if (keymap_loaded) return mrb_true_value();
+  if (keymap_loaded) return mrb_true_value();
 
-    /* Default to empty strings so missing keys are fine */
-    mrb_value xkbmodel   = mrb_str_new_capa(mrb, 0);
-    mrb_value xkblayout  = mrb_str_new_capa(mrb, 0);
-    mrb_value xkbvariant = mrb_str_new_capa(mrb, 0);
-    mrb_value xkboptions = mrb_str_new_capa(mrb, 0);
+  /* Defaults: US PC105 keyboard */
+  mrb_value xkbmodel   = mrb_str_new_lit(mrb, "pc105");
+  mrb_value xkblayout  = mrb_str_new_lit(mrb, "us");
+  mrb_value xkbvariant = mrb_str_new_lit(mrb, "");
+  mrb_value xkboptions = mrb_str_new_lit(mrb, "");
 
-    /* Parse /etc/default/keyboard if present */
-    FILE *kf = fopen("/etc/default/keyboard", "r");
-    if (kf) {
-        char line[512];
-        while (fgets(line, sizeof(line), kf)) {
-            char *p = line;
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == '#' || *p == '\0' || *p == '\n') continue;
+  FILE *kf = fopen("/etc/default/keyboard", "r");
+  if (kf) {
+    char line[512];
+    while (fgets(line, sizeof(line), kf)) {
+      char *p = line;
+      while (*p == ' ' || *p == '\t') p++;
+      if (*p == '#' || *p == '\0' || *p == '\n') continue;
 
-            char *eq = strchr(p, '=');
-            if (!eq) continue;
-            *eq = '\0';
-            char *name = p;
-            char *val = eq + 1;
+      char *eq = strchr(p, '=');
+      if (!eq) continue;
+      *eq = '\0';
+      char *name = p;
+      char *val = eq + 1;
 
-            size_t len = strlen(val);
-            while (len && (val[len-1] == '\n' || val[len-1] == '\r')) val[--len] = '\0';
+      size_t len = strlen(val);
+      while (len && (val[len-1] == '\n' || val[len-1] == '\r')) val[--len] = '\0';
 
-            if (len >= 2 &&
-                ((val[0] == '"' && val[len-1] == '"') ||
-                 (val[0] == '\'' && val[len-1] == '\''))) {
-                val[len-1] = '\0';
-                val++;
-            }
+      if (len >= 2 &&
+          ((val[0] == '"' && val[len-1] == '"') ||
+          (val[0] == '\'' && val[len-1] == '\''))) {
+        val[len-1] = '\0';
+        val++;
+        len -= 2;
+      }
 
-            if (strcmp(name, "XKBMODEL") == 0)         xkbmodel   = mrb_str_new_cstr(mrb, val);
-            else if (strcmp(name, "XKBLAYOUT") == 0)   xkblayout  = mrb_str_new_cstr(mrb, val);
-            else if (strcmp(name, "XKBVARIANT") == 0)  xkbvariant = mrb_str_new_cstr(mrb, val);
-            else if (strcmp(name, "XKBOPTIONS") == 0)  xkboptions = mrb_str_new_cstr(mrb, val);
+      mrb_value *target = NULL;
+      if (strcmp(name, "XKBMODEL") == 0)         target = &xkbmodel;
+      else if (strcmp(name, "XKBLAYOUT") == 0)   target = &xkblayout;
+      else if (strcmp(name, "XKBVARIANT") == 0)  target = &xkbvariant;
+      else if (strcmp(name, "XKBOPTIONS") == 0)  target = &xkboptions;
+
+      if (target) {
+        mrb_str_resize(mrb, *target, len);
+        memcpy(RSTRING_PTR(*target), val, len);
+      }
+    }
+    fclose(kf);
+  }
+
+
+  /* Pipe: ckbcomp -> loadkeys */
+  int pipefd[2];
+  if (pipe(pipefd) == -1) mrb_sys_fail(mrb, "pipe");
+
+  pid_t pid = fork();
+  if (pid == -1) mrb_sys_fail(mrb, "fork");
+
+  if (pid == 0) {
+    /* child: run ckbcomp | loadkeys */
+    int mid[2];
+    if (pipe(mid) == -1) _exit(127);
+
+    pid_t pid_ckb = fork();
+    if (pid_ckb == -1) _exit(127);
+
+    if (pid_ckb == 0) {
+      /* ckbcomp child */
+      close(mid[0]);
+      dup2(mid[1], STDOUT_FILENO);
+      close(mid[1]);
+
+      const char *model_arg   = RSTRING_CSTR(mrb, xkbmodel);
+      const char *layout_arg  = RSTRING_CSTR(mrb, xkblayout);
+      const char *variant_arg = RSTRING_CSTR(mrb, xkbvariant);
+      const char *options_arg = RSTRING_CSTR(mrb, xkboptions);
+
+      const char *optv[16];
+      int optc = 0;
+      if (options_arg[0] != '\0') {
+        const char *p = options_arg;
+        while (p && *p && optc < (int)(sizeof(optv)/sizeof(optv[0]) - 1)) {
+          optv[optc++] = p;
+          char *comma = strchr(p, ',');
+          if (!comma) break;
+          *comma = '\0';
+          p = comma + 1;
+          while (*p == ' ' || *p == '\t') p++;
         }
-        fclose(kf);
+      }
+      optv[optc] = NULL;
+
+      const char *argv[64];
+      int argc = 0;
+      #define ADD_ARG(s) do { if (argc < (int)(sizeof(argv)/sizeof(argv[0]) - 1)) argv[argc++] = (s); } while (0)
+
+      ADD_ARG("ckbcomp");
+      ADD_ARG("-compact");
+      if (model_arg[0])   { ADD_ARG("-model");   ADD_ARG(model_arg); }
+      if (layout_arg[0])  { ADD_ARG("-layout");  ADD_ARG(layout_arg); }
+      if (variant_arg[0]) { ADD_ARG("-variant"); ADD_ARG(variant_arg); }
+      for (int i = 0; i < optc; i++) {
+        ADD_ARG("-option");
+        ADD_ARG(optv[i]);
+      }
+      argv[argc] = NULL;
+
+      execv("/usr/bin/ckbcomp", (char * const *)argv);
+      _exit(127);
+      #undef ADD_ARG
     }
 
-    /* Pipe: ckbcomp -> loadkeys */
-    int pipefd[2];
-    if (pipe(pipefd) == -1) mrb_sys_fail(mrb, "pipe");
-
-    pid_t pid = fork();
-    if (pid == -1) mrb_sys_fail(mrb, "fork");
-
-    if (pid == 0) {
-        /* child: run ckbcomp | loadkeys, output to stdout (pipefd[1]) */
-        int mid[2];
-        if (pipe(mid) == -1) _exit(127);
-
-        pid_t pid_ckb = fork();
-        if (pid_ckb == -1) _exit(127);
-
-        if (pid_ckb == 0) {
-            /* ckbcomp child */
-            close(mid[0]);
-            dup2(mid[1], STDOUT_FILENO);
-            close(mid[1]);
-
-            const char *model_arg   = RSTRING_CSTR(mrb, xkbmodel);
-            const char *layout_arg  = RSTRING_CSTR(mrb, xkblayout);
-            const char *variant_arg = RSTRING_CSTR(mrb, xkbvariant);
-            const char *options_arg = RSTRING_CSTR(mrb, xkboptions);
-
-            const char *optv[16];
-            int optc = 0;
-            if (options_arg[0] != '\0') {
-                const char *p = options_arg;
-                while (p && *p && optc < (int)(sizeof(optv)/sizeof(optv[0]) - 1)) {
-                    optv[optc++] = p;
-                    char *comma = strchr(p, ',');
-                    if (!comma) break;
-                    *comma = '\0';
-                    p = comma + 1;
-                    while (*p == ' ' || *p == '\t') p++;
-                }
-            }
-            optv[optc] = NULL;
-
-            const char *argv[64];
-            int argc = 0;
-            #define ADD_ARG(s) do { if (argc < (int)(sizeof(argv)/sizeof(argv[0]) - 1)) argv[argc++] = (s); } while (0)
-
-            ADD_ARG("ckbcomp");
-            ADD_ARG("-compact");
-            if (model_arg[0])   { ADD_ARG("-model");   ADD_ARG(model_arg); }
-            if (layout_arg[0])  { ADD_ARG("-layout");  ADD_ARG(layout_arg); }
-            if (variant_arg[0]) { ADD_ARG("-variant"); ADD_ARG(variant_arg); }
-            for (int i = 0; i < optc; i++) {
-                ADD_ARG("-option");
-                ADD_ARG(optv[i]);
-            }
-            argv[argc] = NULL;
-
-            execv("/usr/bin/ckbcomp", (char * const *)argv);
-            _exit(127);
-            #undef ADD_ARG
-        }
-
-        /* loadkeys */
-        close(mid[1]);
-        dup2(mid[0], STDIN_FILENO);
-        close(mid[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[1]);
-        execl("/usr/bin/loadkeys", "loadkeys", "-u", "--mktable", (char *)NULL);
-        _exit(127);
-    }
-
-    /* parent: capture output */
+    /* loadkeys */
+    close(mid[1]);
+    dup2(mid[0], STDIN_FILENO);
+    close(mid[0]);
+    dup2(pipefd[1], STDOUT_FILENO);
     close(pipefd[1]);
-    FILE *fp = fdopen(pipefd[0], "r");
-    if (!fp) mrb_sys_fail(mrb, "fdopen");
+    execl("/usr/bin/loadkeys", "loadkeys", "-u", "--mktable", (char *)NULL);
+    _exit(127);
+  }
 
-    parse_plain_map_stream(fp);
-    fclose(fp);
+  /* parent: capture output */
+  close(pipefd[1]);
+  FILE *fp = fdopen(pipefd[0], "r");
+  if (!fp) mrb_sys_fail(mrb, "fdopen");
 
-    int status;
-    waitpid(pid, &status, 0);
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        mrb_raisef(mrb, E_RUNTIME_ERROR,
-                   "pipeline failed (exit code %d)", WEXITSTATUS(status));
-    }
+  parse_plain_map_stream(fp);
+  fclose(fp);
 
-    keymap_loaded = true;
-    return mrb_true_value();
+  int status;
+  waitpid(pid, &status, 0);
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    mrb_raisef(mrb, E_RUNTIME_ERROR,
+               "pipeline failed (exit code %d)", WEXITSTATUS(status));
+  }
+
+  keymap_loaded = true;
+  return mrb_true_value();
 }
-
 
 static int find_scancode_for_char(unsigned short ch) {
     unsigned char target = (unsigned char)ch;
@@ -630,7 +622,8 @@ int main(int argc, char **argv) {
 
         const char *drop_user = getenv("TNK_DROP_USER");
         if (!drop_user) drop_user = "nobody";
-        if (drop_privileges(mrb, drop_user) != 0) {
+        drop_privileges(mrb, drop_user);
+        if (mrb->exc) {
             rc = 1;
             goto child_cleanup;
         }
@@ -648,17 +641,13 @@ int main(int argc, char **argv) {
             goto child_cleanup;
         }
 
-        char path[PATH_MAX];
-        if (resolve_tnk_path(mrb,
-                            "../share/totally-normal-keyboard/user.rb",
-                            R_OK,
-                            path,
-                            sizeof(path)) != 0) {
+        mrb_value path = resolve_tnk_path(mrb, "../share/totally-normal-keyboard/user.rb", R_OK);
+        if (mrb->exc) {
             rc = 1;
             goto child_cleanup;
         }
 
-        FILE *fp = fopen(path, "r");
+        FILE *fp = fopen(RSTRING_CSTR(mrb, path), "r");
         if (!fp) {
             perror("user.rb");
             rc = 1;
