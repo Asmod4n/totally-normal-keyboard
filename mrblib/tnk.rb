@@ -18,7 +18,6 @@ class Tnk
 
   def setup_user
     Tnk.gen_keymap
-    Tnk.load_keymap
     @io_uring = IO::Uring.new
     hid_proc = Proc.new do |hidraw, hidg|
       @io_uring.prep_read_fixed(hidraw) do |read_op|

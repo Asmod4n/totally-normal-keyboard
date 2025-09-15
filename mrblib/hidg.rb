@@ -40,7 +40,10 @@ class Tnk
         file_write("configs/c.1/MaxPower", "250")
 
         mkdir_p("functions/mass_storage.usb0")
-        share_dir = File.join(Tnk::PREFIX, "share", "totally-normal-keyboard")
+        exe_path = File.realpath(ARGV.first)
+        base_dir = File.realpath(File.dirname(exe_path))
+        share_dir = File.realpath(File.join(base_dir, "../share/totally-normal-keyboard"))
+
         mkdir_p(share_dir)
 
         disk_img = File.join(share_dir, "disk.img")

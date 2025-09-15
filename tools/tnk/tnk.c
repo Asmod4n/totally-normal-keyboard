@@ -1,3 +1,4 @@
+#include "mruby/value.h"
 #define _XOPEN_SOURCE 700
 #define _GNU_SOURCE
 
@@ -24,6 +25,8 @@
 #include <stdbool.h>
 #include <signal.h>
 #include <sys/signalfd.h>
+#include <libgen.h>
+#include <mruby/array.h>
 
 static uid_t target_uid;
 static gid_t target_gid;
@@ -39,20 +42,33 @@ static int chown_cb(const char *fpath, const struct stat *sb,
 
 static int
 resolve_tnk_path(mrb_state *mrb,
-                     const char *rel_path,
-                     int mode,
-                     char *out,
-                     size_t out_size)
+                 const char *rel_path,
+                 int mode,
+                 char *out,
+                 size_t out_size)
 {
-    char base_dir[PATH_MAX];
-    char joined[PATH_MAX];
-    char resolved[PATH_MAX];
+    char exe_path[PATH_MAX] = {0};
+    char base_dir[PATH_MAX] = {0};
+    char joined[PATH_MAX] = {0};
+    char resolved[PATH_MAX] = {0};
 
-    if (!realpath(TNK_PREFIX, base_dir)) {
-        mrb_sys_fail(mrb, "realpath(TNK_PREFIX)");
+    // Get absolute path to current executable
+    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (len < 0) {
+        mrb_sys_fail(mrb, "readlink(/proc/self/exe)");
+        return -1;
+    }
+    exe_path[len] = '\0';
+
+    // Copy to base_dir because dirname() may modify its argument
+    stpncpy(base_dir, exe_path, sizeof(base_dir));
+
+    if (!realpath(dirname(base_dir), base_dir)) {
+        mrb_sys_fail(mrb, "realpath(base_dir)");
         return -1;
     }
 
+    // Join base_dir and rel_path
     if (snprintf(joined, sizeof(joined), "%s/%s", base_dir, rel_path) >= (int)sizeof(joined)) {
         mrb_raise(mrb, E_RUNTIME_ERROR, "path too long");
         return -1;
@@ -60,13 +76,6 @@ resolve_tnk_path(mrb_state *mrb,
 
     if (!realpath(joined, resolved)) {
         mrb_sys_fail(mrb, "realpath(joined)");
-        return -1;
-    }
-
-    size_t base_len = strlen(base_dir);
-    if (strncmp(resolved, base_dir, base_len) != 0 ||
-        (resolved[base_len] != '/' && resolved[base_len] != '\0')) {
-        mrb_raise(mrb, E_RUNTIME_ERROR, "path escapes TNK_PREFIX");
         return -1;
     }
 
@@ -86,7 +95,7 @@ resolve_tnk_path(mrb_state *mrb,
 static int
 drop_privileges(mrb_state *mrb, const char *username) {
     char target_dir[PATH_MAX];
-    if (resolve_tnk_path(mrb, "share/totally-normal-keyboard", F_OK, target_dir, sizeof(target_dir)) != 0) {
+    if (resolve_tnk_path(mrb, "../share/totally-normal-keyboard", F_OK, target_dir, sizeof(target_dir)) != 0) {
         return -1;
     }
 
@@ -204,51 +213,11 @@ static bool utf8_next_cp(const char *s, size_t len, uint32_t *cp, size_t *consum
   return false; // invalid leading byte
 }
 
-static mrb_value
-gen_keymap(mrb_state *mrb, mrb_value self)
-{
-    char resolved[PATH_MAX];
-    if (resolve_tnk_path(mrb,
-                        "share/totally-normal-keyboard/gen_keymap_h.sh",
-                        R_OK,
-                        resolved,
-                        sizeof(resolved)) != 0) {
-        return mrb_false_value();
-    }
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        mrb_sys_fail(mrb, "fork");
-    } else if (pid == 0) {
-        char *argv[] = { resolved, NULL };
-        execv(resolved, argv);
-        _exit(127);
-    }
-
-    int status;
-    if (waitpid(pid, &status, 0) < 0) {
-        mrb_sys_fail(mrb, "waitpid");
-    }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        mrb_raisef(mrb, E_RUNTIME_ERROR,
-                   "gen_keymap_h.sh failed (exit code %d)",
-                   WEXITSTATUS(status));
-    }
-
-    return mrb_true_value();
-}
-
-
 static unsigned short plain_map[NR_KEYS];
-static int keymap_loaded = 0;
+static bool keymap_loaded = false;
 
-static int parse_plain_map_file(const char *path) {
-    FILE *fp = fopen(path, "r");
-    if (!fp) {
-        fprintf(stderr, "Error opening %s: %s\n", path, strerror(errno));
-        return -1;
-    }
-
+static void
+parse_plain_map_stream(FILE *fp) {
     char buf[4096];
     int found = 0;
     int idx = 0;
@@ -279,13 +248,39 @@ static int parse_plain_map_file(const char *path) {
         }
     }
 
-    fclose(fp);
-
     if (idx != NR_KEYS) {
         fprintf(stderr, "Warning: expected %d keys, got %d\n", NR_KEYS, idx);
     }
+}
 
-    return 0;
+static mrb_value
+gen_keymap(mrb_state *mrb, mrb_value self)
+{
+    if (keymap_loaded) return  mrb_true_value();
+    const char *cmd =
+        "bash -euo pipefail -c '"
+        "source /etc/default/keyboard; "
+        "/usr/bin/ckbcomp -compact \"$XKBLAYOUT\" \"$XKBVARIANT\" \"$XKBMODEL\" \"$XKBOPTIONS\" "
+        "| /usr/bin/loadkeys -u --mktable"
+        "'";
+
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+        mrb_sys_fail(mrb, "popen");
+    }
+
+    parse_plain_map_stream(fp);
+
+    int rc = pclose(fp);
+    if (rc == -1) {
+        mrb_sys_fail(mrb, "pclose");
+    } else if (!WIFEXITED(rc) || WEXITSTATUS(rc) != 0) {
+        mrb_raisef(mrb, E_RUNTIME_ERROR,
+                   "pipeline failed (exit code %d)", WEXITSTATUS(rc));
+    }
+
+    keymap_loaded = true;
+    return mrb_true_value();
 }
 
 static int find_scancode_for_char(unsigned short ch) {
@@ -296,32 +291,6 @@ static int find_scancode_for_char(unsigned short ch) {
         }
     }
     return -1;
-}
-
-static mrb_value
-load_keymap(mrb_state *mrb, mrb_value self)
-{
-    if (keymap_loaded) {
-        return mrb_true_value();
-    }
-
-    char resolved[PATH_MAX];
-
-    if (resolve_tnk_path(mrb,
-                        "share/totally-normal-keyboard/keymap.h",
-                        R_OK,
-                        resolved,
-                        sizeof(resolved)) != 0) {
-        return mrb_false_value();
-    }
-
-    if (parse_plain_map_file(resolved) != 0) {
-        mrb_raisef(mrb, E_RUNTIME_ERROR,
-                   "failed to parse %S", mrb_str_new_cstr(mrb, resolved));
-    }
-
-    keymap_loaded = 1;
-    return mrb_true_value();
 }
 
 static mrb_value
@@ -515,6 +484,11 @@ int main(int argc, char **argv) {
         perror("mrb_open()");
         return 1;
     }
+    mrb_value argv_ary = mrb_ary_new_capa(mrb, argc);
+    for (int i = 0; i < argc; i++) {
+        mrb_ary_push(mrb, argv_ary, mrb_str_new_cstr(mrb, argv[i]));
+    }
+    mrb_define_global_const(mrb, "ARGV", argv_ary);
 
     struct RClass *tnk_cls = mrb_class_get_id(mrb, MRB_SYM(Tnk));
     mrb_value tnk = mrb_obj_value(tnk_cls);
@@ -551,7 +525,6 @@ int main(int argc, char **argv) {
         struct RClass *hotkeys = mrb_module_get_under_id(mrb, tnk_cls, MRB_SYM(Hotkeys));
         mrb_define_module_function_id(mrb, hotkeys, MRB_SYM(handle_hid_report), tnk_handle_hid_report_bridge, MRB_ARGS_REQ(1));
         mrb_define_module_function_id(mrb, tnk_cls, MRB_SYM(gen_keymap), gen_keymap, MRB_ARGS_NONE());
-        mrb_define_module_function_id(mrb, tnk_cls, MRB_SYM(load_keymap), load_keymap, MRB_ARGS_NONE());
         mrb_funcall_id(mrb, tnk, MRB_SYM(setup_user), 0);
         if (mrb->exc) {
             rc = 1;
@@ -565,7 +538,7 @@ int main(int argc, char **argv) {
 
         char path[PATH_MAX];
         if (resolve_tnk_path(mrb,
-                            "share/totally-normal-keyboard/user.rb",
+                            "../share/totally-normal-keyboard/user.rb",
                             R_OK,
                             path,
                             sizeof(path)) != 0) {
