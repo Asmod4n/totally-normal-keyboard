@@ -259,62 +259,52 @@ parse_plain_map_stream(FILE *fp) {
     }
 }
 
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <errno.h>
 
 static mrb_value
 gen_keymap(mrb_state *mrb, mrb_value self)
 {
     if (keymap_loaded) return mrb_true_value();
 
-    mrb_value xkbmodel   = mrb_nil_value();
-    mrb_value xkblayout  = mrb_nil_value();
-    mrb_value xkbvariant = mrb_nil_value();
-    mrb_value xkboptions = mrb_nil_value();
+    /* Default to empty strings so missing keys are fine */
+    mrb_value xkbmodel   = mrb_str_new_capa(mrb, 0);
+    mrb_value xkblayout  = mrb_str_new_capa(mrb, 0);
+    mrb_value xkbvariant = mrb_str_new_capa(mrb, 0);
+    mrb_value xkboptions = mrb_str_new_capa(mrb, 0);
 
-    // Parse /etc/default/keyboard
+    /* Parse /etc/default/keyboard if present */
     FILE *kf = fopen("/etc/default/keyboard", "r");
-    if (!kf) mrb_sys_fail(mrb, "fopen /etc/default/keyboard");
+    if (kf) {
+        char line[512];
+        while (fgets(line, sizeof(line), kf)) {
+            char *p = line;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '#' || *p == '\0' || *p == '\n') continue;
 
-    char line[512];
-    while (fgets(line, sizeof(line), kf)) {
-        char *p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '#' || *p == '\0' || *p == '\n') continue;
+            char *eq = strchr(p, '=');
+            if (!eq) continue;
+            *eq = '\0';
+            char *name = p;
+            char *val = eq + 1;
 
-        char *eq = strchr(p, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        char *name = p;
-        char *val = eq + 1;
+            size_t len = strlen(val);
+            while (len && (val[len-1] == '\n' || val[len-1] == '\r')) val[--len] = '\0';
 
-        // strip newline
-        size_t len = strlen(val);
-        while (len && (val[len-1] == '\n' || val[len-1] == '\r')) val[--len] = '\0';
+            if (len >= 2 &&
+                ((val[0] == '"' && val[len-1] == '"') ||
+                 (val[0] == '\'' && val[len-1] == '\''))) {
+                val[len-1] = '\0';
+                val++;
+            }
 
-        // strip quotes
-        if ((val[0] == '"' && val[len-1] == '"') || (val[0] == '\'' && val[len-1] == '\'')) {
-            val[len-1] = '\0';
-            val++;
+            if (strcmp(name, "XKBMODEL") == 0)         xkbmodel   = mrb_str_new_cstr(mrb, val);
+            else if (strcmp(name, "XKBLAYOUT") == 0)   xkblayout  = mrb_str_new_cstr(mrb, val);
+            else if (strcmp(name, "XKBVARIANT") == 0)  xkbvariant = mrb_str_new_cstr(mrb, val);
+            else if (strcmp(name, "XKBOPTIONS") == 0)  xkboptions = mrb_str_new_cstr(mrb, val);
         }
-
-        if (strcmp(name, "XKBMODEL") == 0)   xkbmodel   = mrb_str_new_cstr(mrb, val);
-        else if (strcmp(name, "XKBLAYOUT") == 0)  xkblayout  = mrb_str_new_cstr(mrb, val);
-        else if (strcmp(name, "XKBVARIANT") == 0) xkbvariant = mrb_str_new_cstr(mrb, val);
-        else if (strcmp(name, "XKBOPTIONS") == 0) xkboptions = mrb_str_new_cstr(mrb, val);
-    }
-    fclose(kf);
-
-    // Fail fast if missing
-    if (mrb_nil_p(xkbmodel) || mrb_nil_p(xkblayout) ||
-        mrb_nil_p(xkbvariant) || mrb_nil_p(xkboptions)) {
-        mrb_raise(mrb, E_RUNTIME_ERROR, "missing required keyboard config");
+        fclose(kf);
     }
 
-    // Pipe: ckbcomp -> loadkeys
+    /* Pipe: ckbcomp -> loadkeys */
     int pipefd[2];
     if (pipe(pipefd) == -1) mrb_sys_fail(mrb, "pipe");
 
@@ -322,7 +312,7 @@ gen_keymap(mrb_state *mrb, mrb_value self)
     if (pid == -1) mrb_sys_fail(mrb, "fork");
 
     if (pid == 0) {
-        // child: run ckbcomp | loadkeys, output to stdout (pipefd[1])
+        /* child: run ckbcomp | loadkeys, output to stdout (pipefd[1]) */
         int mid[2];
         if (pipe(mid) == -1) _exit(127);
 
@@ -330,20 +320,76 @@ gen_keymap(mrb_state *mrb, mrb_value self)
         if (pid_ckb == -1) _exit(127);
 
         if (pid_ckb == 0) {
-            // ckbcomp
+            /* ckbcomp */
             close(mid[0]);
             dup2(mid[1], STDOUT_FILENO);
             close(mid[1]);
-            execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
-                  RSTRING_CSTR(mrb, xkblayout),
-                  RSTRING_CSTR(mrb, xkbvariant),
-                  RSTRING_CSTR(mrb, xkbmodel),
-                  RSTRING_CSTR(mrb, xkboptions),
-                  (char *)NULL);
+
+            /* Build argv for execl with correct flags */
+            const char *model_arg   = RSTRING_CSTR(mrb, xkbmodel);
+            const char *layout_arg  = RSTRING_CSTR(mrb, xkblayout);
+            const char *variant_arg = RSTRING_CSTR(mrb, xkbvariant);
+            const char *options_arg = RSTRING_CSTR(mrb, xkboptions);
+
+            /* If options contain commas, split them */
+            char *opts_copy = NULL;
+            char *opt1 = NULL, *opt2 = NULL;
+            if (options_arg[0] != '\0') {
+                opts_copy = strdup(options_arg);
+                char *comma = strchr(opts_copy, ',');
+                if (comma) {
+                    *comma = '\0';
+                    opt1 = opts_copy;
+                    opt2 = comma + 1;
+                } else {
+                    opt1 = opts_copy;
+                }
+            }
+
+            if (variant_arg[0] != '\0' && opt1 && opt2) {
+                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
+                      "-model",   model_arg,
+                      "-layout",  layout_arg,
+                      "-variant", variant_arg,
+                      "-option",  opt1,
+                      "-option",  opt2,
+                      (char *)NULL);
+            } else if (variant_arg[0] != '\0' && opt1) {
+                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
+                      "-model",   model_arg,
+                      "-layout",  layout_arg,
+                      "-variant", variant_arg,
+                      "-option",  opt1,
+                      (char *)NULL);
+            } else if (variant_arg[0] != '\0') {
+                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
+                      "-model",   model_arg,
+                      "-layout",  layout_arg,
+                      "-variant", variant_arg,
+                      (char *)NULL);
+            } else if (opt1 && opt2) {
+                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
+                      "-model",   model_arg,
+                      "-layout",  layout_arg,
+                      "-option",  opt1,
+                      "-option",  opt2,
+                      (char *)NULL);
+            } else if (opt1) {
+                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
+                      "-model",   model_arg,
+                      "-layout",  layout_arg,
+                      "-option",  opt1,
+                      (char *)NULL);
+            } else {
+                execl("/usr/bin/ckbcomp", "ckbcomp", "-compact",
+                      "-model",   model_arg,
+                      "-layout",  layout_arg,
+                      (char *)NULL);
+            }
             _exit(127);
         }
 
-        // loadkeys
+        /* loadkeys */
         close(mid[1]);
         dup2(mid[0], STDIN_FILENO);
         close(mid[0]);
@@ -353,7 +399,7 @@ gen_keymap(mrb_state *mrb, mrb_value self)
         _exit(127);
     }
 
-    // parent: capture output
+    /* parent: capture output */
     close(pipefd[1]);
     FILE *fp = fdopen(pipefd[0], "r");
     if (!fp) mrb_sys_fail(mrb, "fdopen");
@@ -371,6 +417,7 @@ gen_keymap(mrb_state *mrb, mrb_value self)
     keymap_loaded = true;
     return mrb_true_value();
 }
+
 
 static int find_scancode_for_char(unsigned short ch) {
     unsigned char target = (unsigned char)ch;
