@@ -42,6 +42,6 @@ def ensure_toolchain
   abort "Expected build directory not found" unless build_dir
 
   Dir.chdir(build_dir) do
-    system("make OUTPUT=#{TOOLCHAIN_OUTPUT} install") or abort "Toolchain install failed"
+    system("make OUTPUT=#{TOOLCHAIN_OUTPUT} -j$(nproc) install") or abort "Toolchain install failed"
   end
 end

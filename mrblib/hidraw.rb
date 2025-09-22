@@ -7,7 +7,6 @@ class Tnk
 
       device_dir = File.realpath(sys_path)
 
-      # Alle eventX-Nodes ermitteln
       event_nodes = []
       Dir.entries(device_dir).each do |entry|
         next if entry.start_with?(".")
@@ -26,7 +25,6 @@ class Tnk
       end
       event_nodes.map! { |p| File.realpath(p) rescue p }
 
-      # by-id Symlinks finden, die auf diese eventX zeigen
       by_id_dir = "/dev/input/by-id"
 
       Dir.entries(by_id_dir).filter_map do |name|
@@ -123,7 +121,6 @@ class Tnk
 
     private
 
-    # Helper: Find /dev/input/event* nodes in a directory
     def self.find_event_nodes(dir)
       Dir.entries(dir)
         .select { |name| name.start_with?("event") }

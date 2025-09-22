@@ -8,8 +8,9 @@
 
 static mrb_value grab(mrb_state *mrb, mrb_value self)
 {
-    mrb_int fd;
-    mrb_get_args(mrb, "i", &fd);
+    mrb_value fd_val;
+    mrb_get_args(mrb, "o", &fd_val);
+    int fd = (int) mrb_integer(mrb_type_convert(mrb, fd_val, MRB_TT_INTEGER, MRB_SYM(fileno)));
     ioctl(fd, EVIOCGRAB, 0);
     if (ioctl(fd, EVIOCGRAB, 1) < 0) {
         mrb_sys_fail(mrb, "ioctl(EVIOCGRAB, 1)");
@@ -20,9 +21,9 @@ static mrb_value grab(mrb_state *mrb, mrb_value self)
 
 static mrb_value ungrab(mrb_state *mrb, mrb_value self)
 {
-    mrb_int fd;
-    mrb_get_args(mrb, "i", &fd);
-    if (ioctl(fd, EVIOCGRAB, 0) < 0) {
+    mrb_value fd;
+    mrb_get_args(mrb, "o", &fd);
+    if (ioctl((int) mrb_integer(mrb_type_convert(mrb, fd, MRB_TT_INTEGER, MRB_SYM(fileno))), EVIOCGRAB, 0) < 0) {
         mrb_sys_fail(mrb, "ioctl(EVIOCGRAB, 0)");
     }
 

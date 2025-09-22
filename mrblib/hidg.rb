@@ -100,10 +100,6 @@ class Tnk
         file_write("#{GADGET}/UDC", "")
       end
 
-      unless File.directory?(GADGET)
-        raise GadgetError, "Gadget directory not found: #{GADGET}"
-      end
-
       Dir.chdir(GADGET)
       debug_puts "🧹 Removing config symlinks..."
       remove_symlinks("configs/c.1")
