@@ -14,9 +14,7 @@ class Tnk
       if File.exist?("#{GADGET}/UDC")
         udc = read_first_line("#{GADGET}/UDC")
         if udc.delete(" \t\r\n\f\v") != ""
-          original_pwd = Dir.pwd
           stop
-          Dir.chdir(original_pwd)
         end
       end
 
@@ -49,7 +47,7 @@ class Tnk
         disk_img = File.join(share_dir, "disk.img")
         unless File.exist?(disk_img)
           debug_puts "📦 Creating disk.img..."
-          sh "dd if=/dev/zero of=#{disk_img} bs=1M count=128"
+          sh "dd if=/dev/zero of=#{disk_img} bs=128M count=1"
           sh "mkfs.vfat #{disk_img}"
         else
           debug_puts "✅ disk.img exists – skipping creation."
@@ -87,14 +85,15 @@ class Tnk
         udc_name = sh_capture("ls /sys/class/udc").split("\n").first
         file_write("UDC", udc_name)
 
-        unless sh_silent("ip link set usb0 up") || sh_silent("ifconfig usb0 up")
-          debug_puts "⚠️  Could not bring up usb0 (ip/ifconfig failed)"
+        unless sh_silent("ip link set usb0 up")
+          debug_puts "⚠️  Could not bring up usb0 (ip failed)"
         end
         sh_silent("ip -6 addr add fe80::1 dev usb0")
       end
     end
 
     def stop
+      original_pwd = Dir.pwd
       debug_puts "🛑 Cleaning up USB gadget tnk..."
       if File.exist?("#{GADGET}/UDC")
         file_write("#{GADGET}/UDC", "")
@@ -113,6 +112,8 @@ class Tnk
       Dir.chdir("..")
       Dir.rmdir("tnk")
       debug_puts "✅ Gadget tnk removed."
+    ensure
+      Dir.chdir(original_pwd)
     end
 
     private

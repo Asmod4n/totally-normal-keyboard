@@ -30,38 +30,43 @@
 static mrb_value
 resolve_tnk_path(mrb_state *mrb, const char *rel_path, int mode)
 {
-  char buf[PATH_MAX + 1];
   ssize_t len;
+  char *tmp = NULL;
 
-  len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+  mrb_value buf_str = mrb_str_new_capa(mrb, PATH_MAX);
+
+  len = readlink("/proc/self/exe", RSTRING_PTR(buf_str), PATH_MAX);
   if (len < 0) {
     mrb_sys_fail(mrb, "readlink(/proc/self/exe)");
   }
-  buf[len] = '\0';
+  buf_str = mrb_str_resize(mrb, buf_str, len);
 
-  dirname(buf);
+  dirname(RSTRING_PTR(buf_str));
+  buf_str = mrb_str_resize(mrb, buf_str, strlen(RSTRING_PTR(buf_str)));
 
-  if (!realpath(buf, buf)) {
+  if (!(tmp = realpath(RSTRING_CSTR(mrb, buf_str), NULL))) {
     mrb_sys_fail(mrb, "realpath(base_dir)");
   }
+  buf_str = mrb_str_resize(mrb, buf_str, 0);
+  buf_str = mrb_str_cat_cstr(mrb, buf_str, tmp);
+  free(tmp);
+  tmp = NULL;
 
-  len = strlen(buf);
-  if ((size_t)len + 1 + strlen(rel_path) >= sizeof(buf)) {
-    errno = ENAMETOOLONG;
-    mrb_sys_fail(mrb, "join path");
-  }
-  buf[len++] = '/';
-  strcpy(buf + len, rel_path);
+  buf_str = mrb_str_cat_lit(mrb, buf_str, "/");
+  buf_str = mrb_str_cat_cstr(mrb, buf_str, rel_path);
 
-  if (!realpath(buf, buf)) {
+  if (!(tmp = realpath(RSTRING_CSTR(mrb, buf_str), NULL))) {
     mrb_sys_fail(mrb, "realpath(joined)");
   }
+  buf_str = mrb_str_resize(mrb, buf_str, 0);
+  buf_str = mrb_str_cat_cstr(mrb, buf_str, tmp);
+  free(tmp);
 
-  if (access(buf, mode) != 0) {
+  if (access(RSTRING_CSTR(mrb, buf_str), mode) != 0) {
     mrb_sys_fail(mrb, "access(resolved)");
   }
 
-  return mrb_str_new_cstr(mrb, buf);
+  return buf_str;
 }
 
 static uid_t target_uid;
@@ -166,6 +171,19 @@ parse_plain_map_stream(FILE *fp)
     fprintf(stderr, "Warning: expected %d keys, got %d\n", NR_KEYS, idx);
   }
 }
+
+static int char_to_scancode[UCHAR_MAX + 1];
+
+static void rebuild_char_lookup(void) {
+    // Default to "not found"
+    memset(char_to_scancode, 0xFF, sizeof(char_to_scancode));
+
+    for (int i = 0; i < NR_KEYS; i++) {
+        unsigned char ch = plain_map[i] & 0xFF;
+        char_to_scancode[ch] = i;
+    }
+}
+
 
 static bool keymap_loaded = false;
 
@@ -319,6 +337,7 @@ gen_keymap(mrb_state *mrb, mrb_value self)
                WEXITSTATUS(status));
   }
 
+  rebuild_char_lookup();
   keymap_loaded = true;
   return mrb_true_value();
 }
@@ -374,18 +393,6 @@ utf8_next_cp(const char *s, size_t len, uint32_t *cp)
   return false; // invalid leading byte
 }
 
-static int
-find_scancode_for_char(unsigned short ch)
-{
-  unsigned char target = (unsigned char)ch;
-  for (int i = 0; i < NR_KEYS; i++) {
-    if ((plain_map[i] & 0xFF) == target) {
-      return i;
-    }
-  }
-  return -1;
-}
-
 static const uint8_t scancode_to_hid[NR_KEYS] = {
     [1] = 0x29,  [2] = 0x1E,  [3] = 0x1F,  [4] = 0x20,  [5] = 0x21,
     [6] = 0x22,  [7] = 0x23,  [8] = 0x24,  [9] = 0x25,  [10] = 0x26,
@@ -416,102 +423,95 @@ mrb_generate_hid_report(mrb_state *mrb, mrb_value self)
   uint8_t modifier = 0;
   int key_slot = 0;
 
-  /* Pass 1: symbols only */
-  for (int arg_index = 0;
-       arg_index < argc && key_slot < 6 && mrb_symbol_p(argv[arg_index]);
-       arg_index++) {
+  for (int i = 0; i < argc && key_slot < 6; i++) {
+    if (mrb_symbol_p(argv[i])) {
+      switch (mrb_symbol(argv[i])) {
+        /* Modifiers */
+        case MRB_SYM(lctrl):  modifier |= 0x01; break;
+        case MRB_SYM(lshift): modifier |= 0x02; break;
+        case MRB_SYM(lalt):   modifier |= 0x04; break;
+        case MRB_SYM(lgui):   modifier |= 0x08; break;
+        case MRB_SYM(rctrl):  modifier |= 0x10; break;
+        case MRB_SYM(rshift): modifier |= 0x20; break;
+        case MRB_SYM(ralt):   modifier |= 0x40; break;
+        case MRB_SYM(rgui):   modifier |= 0x80; break;
 
-    switch (mrb_symbol(argv[arg_index])) {
-    /* Modifiers */
-    case MRB_SYM(lctrl):  modifier |= 0x01; break;
-    case MRB_SYM(lshift): modifier |= 0x02; break;
-    case MRB_SYM(lalt):   modifier |= 0x04; break;
-    case MRB_SYM(lgui):   modifier |= 0x08; break;
-    case MRB_SYM(rctrl):  modifier |= 0x10; break;
-    case MRB_SYM(rshift): modifier |= 0x20; break;
-    case MRB_SYM(ralt):   modifier |= 0x40; break;
-    case MRB_SYM(rgui):   modifier |= 0x80; break;
+        /* Non‑printing keys */
+        case MRB_SYM(enter):      report[2 + key_slot++] = 0x28; break;
+        case MRB_SYM(esc):        report[2 + key_slot++] = 0x29; break;
+        case MRB_SYM(backspace):  report[2 + key_slot++] = 0x2A; break;
+        case MRB_SYM(tab):        report[2 + key_slot++] = 0x2B; break;
+        case MRB_SYM(capslock):   report[2 + key_slot++] = 0x39; break;
 
-    /* Non‑printing keys */
-    case MRB_SYM(enter):      report[2 + key_slot++] = 0x28;  break;
-    case MRB_SYM(esc):        report[2 + key_slot++] = 0x29;  break;
-    case MRB_SYM(backspace):  report[2 + key_slot++] = 0x2A;  break;
-    case MRB_SYM(tab):        report[2 + key_slot++] = 0x2B;  break;
-    case MRB_SYM(capslock):   report[2 + key_slot++] = 0x39;  break;
+        /* Function keys */
+        case MRB_SYM(f1):  report[2 + key_slot++] = 0x3A; break;
+        case MRB_SYM(f2):  report[2 + key_slot++] = 0x3B; break;
+        case MRB_SYM(f3):  report[2 + key_slot++] = 0x3C; break;
+        case MRB_SYM(f4):  report[2 + key_slot++] = 0x3D; break;
+        case MRB_SYM(f5):  report[2 + key_slot++] = 0x3E; break;
+        case MRB_SYM(f6):  report[2 + key_slot++] = 0x3F; break;
+        case MRB_SYM(f7):  report[2 + key_slot++] = 0x40; break;
+        case MRB_SYM(f8):  report[2 + key_slot++] = 0x41; break;
+        case MRB_SYM(f9):  report[2 + key_slot++] = 0x42; break;
+        case MRB_SYM(f10): report[2 + key_slot++] = 0x43; break;
+        case MRB_SYM(f11): report[2 + key_slot++] = 0x44; break;
+        case MRB_SYM(f12): report[2 + key_slot++] = 0x45; break;
 
-    /* Function keys */
-    case MRB_SYM(f1): report[2 + key_slot++] = 0x3A;  break;
-    case MRB_SYM(f2): report[2 + key_slot++] = 0x3B;  break;
-    case MRB_SYM(f3): report[2 + key_slot++] = 0x3C;  break;
-    case MRB_SYM(f4): report[2 + key_slot++] = 0x3D;  break;
-    case MRB_SYM(f5): report[2 + key_slot++] = 0x3E;  break;
-    case MRB_SYM(f6): report[2 + key_slot++] = 0x3F;  break;
-    case MRB_SYM(f7): report[2 + key_slot++] = 0x40;  break;
-    case MRB_SYM(f8): report[2 + key_slot++] = 0x41;  break;
-    case MRB_SYM(f9): report[2 + key_slot++] = 0x42;  break;
-    case MRB_SYM(f10):report[2 + key_slot++] = 0x43;  break;
-    case MRB_SYM(f11):report[2 + key_slot++] = 0x44;  break;
-    case MRB_SYM(f12):report[2 + key_slot++] = 0x45;  break;
+        /* System keys */
+        case MRB_SYM(printscreen): report[2 + key_slot++] = 0x46; break;
+        case MRB_SYM(scrolllock):  report[2 + key_slot++] = 0x47; break;
+        case MRB_SYM(pause):       report[2 + key_slot++] = 0x48; break;
 
-    /* System keys */
-    case MRB_SYM(printscreen):  report[2 + key_slot++] = 0x46;  break;
-    case MRB_SYM(scrolllock):   report[2 + key_slot++] = 0x47;  break;
-    case MRB_SYM(pause):        report[2 + key_slot++] = 0x48;  break;
+        /* Navigation */
+        case MRB_SYM(insert):   report[2 + key_slot++] = 0x49; break;
+        case MRB_SYM(home):     report[2 + key_slot++] = 0x4A; break;
+        case MRB_SYM(pageup):   report[2 + key_slot++] = 0x4B; break;
+        case MRB_SYM(delete):   report[2 + key_slot++] = 0x4C; break;
+        case MRB_SYM(end):      report[2 + key_slot++] = 0x4D; break;
+        case MRB_SYM(pagedown): report[2 + key_slot++] = 0x4E; break;
+        case MRB_SYM(right):    report[2 + key_slot++] = 0x4F; break;
+        case MRB_SYM(left):     report[2 + key_slot++] = 0x50; break;
+        case MRB_SYM(down):     report[2 + key_slot++] = 0x51; break;
+        case MRB_SYM(up):       report[2 + key_slot++] = 0x52; break;
 
-    /* Navigation */
-    case MRB_SYM(insert):   report[2 + key_slot++] = 0x49;  break;
-    case MRB_SYM(home):     report[2 + key_slot++] = 0x4A;  break;
-    case MRB_SYM(pageup):   report[2 + key_slot++] = 0x4B;  break;
-    case MRB_SYM(delete):   report[2 + key_slot++] = 0x4C;  break;
-    case MRB_SYM(end):      report[2 + key_slot++] = 0x4D;  break;
-    case MRB_SYM(pagedown): report[2 + key_slot++] = 0x4E;  break;
-    case MRB_SYM(right):    report[2 + key_slot++] = 0x4F;  break;
-    case MRB_SYM(left):     report[2 + key_slot++] = 0x50;  break;
-    case MRB_SYM(down):     report[2 + key_slot++] = 0x51;  break;
-    case MRB_SYM(up):       report[2 + key_slot++] = 0x52;  break;
+        /* Keypad */
+        case MRB_SYM(kp_numlock): report[2 + key_slot++] = 0x53; break;
+        case MRB_SYM(kp_enter):   report[2 + key_slot++] = 0x58; break;
 
-    /* Keypad */
-    case MRB_SYM(kp_numlock): report[2 + key_slot++] = 0x53;  break;
-    case MRB_SYM(kp_enter):   report[2 + key_slot++] = 0x58;  break;
+        default:
+          mrb_raisef(mrb, E_ARGUMENT_ERROR,
+                     "unknown key symbol: %S", argv[i]);
+      }
+    } else if (mrb_string_p(argv[i])) {
+      /* Printable string handling */
+      const char *s = RSTRING_PTR(argv[i]);
+      size_t len = (size_t)RSTRING_LEN(argv[i]);
+      if (!len)
+        mrb_raise(mrb, E_ARGUMENT_ERROR, "empty string key");
 
-    default:
-      mrb_raisef(mrb, E_ARGUMENT_ERROR, "unknown key symbol: %S",
-                 argv[arg_index]);
+      uint32_t cp;
+      if (!utf8_next_cp(s, len, &cp))
+        mrb_raise(mrb, E_ARGUMENT_ERROR, "invalid UTF-8 sequence");
+
+      int sc = char_to_scancode[(unsigned char)cp]; // O(1) lookup
+      if (sc < 0)
+        mrb_raise(mrb, E_ARGUMENT_ERROR, "character not in keymap");
+
+      uint8_t hid = scancode_to_hid[sc];
+      if (hid == 0x00)
+        mrb_raise(mrb, E_ARGUMENT_ERROR, "character has no HID mapping");
+
+      report[2 + key_slot++] = hid;
+    } else {
+      mrb_raisef(mrb, E_ARGUMENT_ERROR,
+                 "unsupported key arg type: %S", argv[i]);
     }
-  }
-
-  /* Pass 2: printable strings only */
-  for (int arg_index = 0;
-       arg_index < argc && key_slot < 6 && mrb_string_p(argv[arg_index]);
-       arg_index++) {
-
-    const char *s = RSTRING_PTR(argv[arg_index]);
-    size_t len = (size_t)RSTRING_LEN(argv[arg_index]);
-    if (!len) {
-      mrb_raise(mrb, E_ARGUMENT_ERROR, "empty string key");
-    }
-
-    uint32_t cp;
-    if (!utf8_next_cp(s, len, &cp)) {
-      mrb_raise(mrb, E_ARGUMENT_ERROR, "invalid UTF-8 sequence");
-    }
-
-    int sc = find_scancode_for_char((unsigned short)cp);
-    if (sc < 0) {
-      mrb_raise(mrb, E_ARGUMENT_ERROR, "character not in keymap");
-    }
-
-    uint8_t hid = scancode_to_hid[sc];
-    if (hid == 0x00) {
-      mrb_raise(mrb, E_ARGUMENT_ERROR, "character has no HID mapping");
-    }
-
-    report[2 + key_slot++] = hid;
   }
 
   report[0] = modifier;
   return mrb_str_new(mrb, (const char *)report, sizeof(report));
 }
+
 
 static bool
 mrb_totally_normal_keyboard_user_init(mrb_state *user_mrb)
@@ -643,7 +643,8 @@ int main(int argc, char **argv) {
   for (int i = 0; i < argc; i++) {
     mrb_ary_push(mrb, argv_ary, mrb_str_new_cstr(mrb, argv[i]));
   }
-  mrb_define_global_const(mrb, "ARGV", argv_ary);
+  mrb_obj_freeze(mrb, argv_ary);
+  mrb_define_const_id(mrb, mrb->object_class, MRB_SYM(ARGV), argv_ary);
 
   struct RClass *tnk_cls = mrb_class_get_id(mrb, MRB_SYM(Tnk));
   mrb_value tnk = mrb_obj_value(tnk_cls);

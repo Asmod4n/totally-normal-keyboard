@@ -91,6 +91,7 @@ task :uninstall do
   %w[tnk tnk-debug].each { |bin| FileUtils.rm_f(File.join(bindir, bin)) }
   FileUtils.rm_rf(sharedir)
 
+  sh 'systemctl stop tnk.service' rescue nil
   sh 'systemctl disable tnk.service' rescue nil
   FileUtils.rm_f(unitfile)
   sh 'systemctl daemon-reload'
