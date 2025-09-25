@@ -30,12 +30,11 @@
 static mrb_value
 resolve_tnk_path(mrb_state *mrb, const char *rel_path, int mode)
 {
-  ssize_t len;
   char *tmp = NULL;
 
   mrb_value buf_str = mrb_str_new_capa(mrb, PATH_MAX);
 
-  len = readlink("/proc/self/exe", RSTRING_PTR(buf_str), PATH_MAX);
+  ssize_t len = readlink("/proc/self/exe", RSTRING_PTR(buf_str), PATH_MAX);
   if (len < 0) {
     mrb_sys_fail(mrb, "readlink(/proc/self/exe)");
   }
@@ -184,14 +183,9 @@ static void rebuild_char_lookup(void) {
     }
 }
 
-
-static bool keymap_loaded = false;
-
 static mrb_value
 gen_keymap(mrb_state *mrb, mrb_value self)
 {
-  if (keymap_loaded) return mrb_true_value();
-
   /* Defaults: US PC105 keyboard */
   mrb_value xkbmodel = mrb_str_new_lit(mrb, "pc105");
   mrb_value xkblayout = mrb_str_new_lit(mrb, "us");
@@ -236,8 +230,6 @@ gen_keymap(mrb_state *mrb, mrb_value self)
       }
     }
     fclose(kf);
-  } else {
-    mrb_sys_fail(mrb, "fopen(/etc/default/keyboard, r)");
   }
 
   /* Pipe: ckbcomp -> loadkeys */
@@ -262,6 +254,7 @@ gen_keymap(mrb_state *mrb, mrb_value self)
       const char *model_arg = RSTRING_CSTR(mrb, xkbmodel);
       const char *layout_arg = RSTRING_CSTR(mrb, xkblayout);
       const char *variant_arg = RSTRING_CSTR(mrb, xkbvariant);
+      mrb_str_modify(mrb, RSTRING(xkboptions));
       const char *options_arg = RSTRING_CSTR(mrb, xkboptions);
 
       const char *optv[16];
@@ -338,7 +331,6 @@ gen_keymap(mrb_state *mrb, mrb_value self)
   }
 
   rebuild_char_lookup();
-  keymap_loaded = true;
   return mrb_true_value();
 }
 
@@ -535,7 +527,7 @@ static bool mrb_tnk_load_hotkeys(mrb_state *user_mrb) {
   static const char hotkeys_rb[] = "class Tnk\n"
                                    "  module Hotkeys\n"
                                    "    @@hotkeys = {}\n"
-                                   "    def self.on_hotkey(*args, &blk)\n"
+                                   "    def self.on(*args, &blk)\n"
                                    "      raise \"no block given\" unless blk\n"
                                    "      report = generate_hid_report(*args)\n"
                                    "      @@hotkeys[report] = blk\n"
@@ -679,7 +671,8 @@ int main(int argc, char **argv) {
       rc = 1;
       goto child_cleanup;
     }
-    struct RClass *hotkeys = mrb_module_get_under_id(mrb, tnk_cls, MRB_SYM(Hotkeys));
+    mrb_gv_set(mrb, MRB_GVSYM(USER_MRB), mrb_true_value());
+    struct RClass *hotkeys = mrb_define_module_under_id(mrb, tnk_cls, MRB_SYM(Hotkeys));
     mrb_define_module_function_id(mrb, hotkeys, MRB_SYM(handle_hid_report),
                                   tnk_handle_hid_report_bridge,
                                   MRB_ARGS_REQ(1));
