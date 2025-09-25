@@ -1,4 +1,7 @@
 # totally-normal-keyboard
+
+Turning an ARM Computer into a keyboard and mouse for a PC to connect to.
+
 What
 ----
 This, currently, turns a arm computer into a usb HID forwarder for a connected host system, as long as its got a usb gadget dwc2 chip.
