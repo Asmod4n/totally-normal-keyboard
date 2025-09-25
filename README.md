@@ -1,132 +1,171 @@
 # totally-normal-keyboard
 
-Turning an ARM Computer into a keyboard and mouse for a PC to connect to.
+Because sometimes a computer just isn’t enough—you need it to *pretend* it’s a keyboard too.
 
-What
-----
-This, currently, turns a arm computer into a usb HID forwarder for a connected host system, as long as its got a usb gadget dwc2 chip.
-Like a Raspberry pi 400 or 500 for example.
-
-How
 ---
-Linux has a config fs which allows you to create usb devices for a host to connect to, like hid devices, mass storage, network, serial ports and more.
 
-When you are on a raspberry pi 400 or 500 you have to add this to your /boot/firmware/config.txt to enanble the gadget mode of your usb-c port
+## What
+This turns an ARM computer into a USB HID forwarder for a connected host system—as long as it’s got a USB gadget `dwc2` chip.
+Think Raspberry Pi 400 or 500. (Yes, the Pi can now cosplay as your keyboard.)
+
+---
+
+## How
+Linux has a `configfs` that lets you create USB devices for a host to connect to: HID devices, mass storage, network, serial ports, and more.
+
+On a Raspberry Pi 400 or 500 you’ll need to add this to your `/boot/firmware/config.txt` to enable gadget mode on your USB-C port:
 ```
 dtoverlay=dwc2,dr_mode=peripheral
 usb_max_current_enable=1
 ```
-before any line starting with [
-then reboot and connect your rpi to a usb port on another device.
-It is recommended to connect your rpi to a powered usb hub which you then connect to your pc.
-Tests with an old nintendo switch usb-c charger where sucessfull to run and compile this app on a raspberry pi 500 while connected to a powered usb hub which was connected to a pc.
+(Add it before any line starting with `[`)
 
-Why
+Then reboot, connect your Pi to another device.
+Pro tip: use a powered USB hub. Tests with an old Nintendo Switch charger to power a hub were successful.
 ---
-I've always wanted to carry around a secure password manager in a pocket i can just connect to any device.
-Or paste something into a device which has no clipboard of its own, like in a BIOS or during OS Setup
+
+## Why
+Ever wanted to carry around a secure password manager that doubles as a keyboard in your pocket?
+Or paste something into a BIOS setup screen, or during OS Setup?
+Or copy a barcode and paste it as text?
+Or copy from your mac, hit a key combo and then paste to your windows pc?
 
 
-build deps
-----------
-To build this you need to have ruby installed and the gcc toolchain and linux headers and some other packages, see below.
-You also need to run this on linux, an attempt has been made to build this on macOS with musl-cross but it would require forking and patching too many tools and libs so it was abandoned.
-This has only been tested to run on Raspberry pi os (aka Debian), it might work on other distros but you are on your own there.
+All of that and more with no proprietary code at all, powered by an plugin eco system to enhance its functionality in a secure way.
+---
 
-here is a list of what packages you need for debian
+## Build deps
+You’ll need:
+- Linux (sorry macOS, i tried, but it got unmaintainable fast)
+- Ruby
+- GCC toolchain
+- Linux headers
+- Some other packages, see below.
+
+On Debian/Raspberry Pi OS, install these:
 ```
-- udev
-- systemd
-- ruby
-- rake
-- console-setup
-- kbd
-- build-essential
-- linux-headers-$(uname -r)
+udev
+systemd
+ruby
+rake
+console-setup
+kbd
+build-essential
+linux-headers-$(uname -r)
 ```
 
-You also need to run
+And don’t forget to run:
 ```sh
 sudo raspi-config
 ```
+to set the correct keyboard layout (option 5).
 
-and set a correct keyboard layout and keymap, you find that under option 5.
+---
 
-getting the source
-------------------
+## Getting the source
 ```sh
 git clone --recurse-submodules https://github.com/Asmod4n/totally-normal-keyboard
 ```
 
-compiling
----------
+---
+
+## Compiling
 ```sh
 cd totally-normal-keyboard
 rake
 ```
 
-installing
-----------
+---
+
+## Installing
 ```sh
 sudo rake install
 ```
 
-running
--------
+---
+
+## Running
 ```sh
 sudo service tnk start
 ```
 
-enabling it to run at boot
---------------------------
+---
+
+## Autostart at boot
 ```sh
 sudo systemctl enable tnk.service
 ```
 
-uninstalling
-------------
+---
+
+## Uninstalling
 ```sh
 sudo rake uninstall
 ```
 
-You can run all rake commands with a PREFIX env var, which will set the app up to run and install from that prefix.
-When you start this app you can set an env var named TNK_DROP_USER to which user to drop to after the setup phase as root is done.
+---
 
-Barebones hotkey support
-------------------------
-At the moment we got barebones hotkey registering and code running when set hotkey was pressed.
-take a look at ```share/user.rb``` this is running a mruby core vm with no gems loaded, its currently being explored how to turn that into something usefull.
+### Notes
+- All rake commands accept a `PREFIX` env var.
+- Use `TNK_DROP_USER` to tell the app which user it should drop down to after root setup is complete.
 
-USB hotplug
------------
-You can hotplug usb hid devices, the app will restart automatically then.
+---
 
-Limitations
------------
-Via testing it was found out you cant connect more than one usb hid device besides the build in keyboard before the kernel errors out and wont allow you to create more hid gadgets.
+## Barebones hotkey support
+Currently supports registering hotkeys and running code when they’re pressed.
+See `share/user.rb` — it runs inside a tiny `mruby` core VM with no gems.
+It’s not super useful *yet*, please come back later for updates.
+
+---
+
+## USB hotplug
+You can hotplug USB HID devices.
+The app will restart itself automatically.
+
+---
+
+## Limitations
+- You can’t connect more than one USB HID device besides the built-in keyboard.
+- The kernel doesn't allow more, most likely a hardware or USB HID Spec limitation.
+
+---
+
+## TODO
+
+### ✅ Foundations (done)
+- Forward all USB HID devices
+- Drop root privileges ASAP
+- User‑registerable hotkey handlers
+- Sandbox user code in a VM
+- Cross‑compile for aarch64 from other archs
+- Msgpack communication with sandboxed VM
+- Install/uninstall tasks
+- Systemd unit file
+- USB hotplug support
+
+### ⏳ Next up: usability & trust
+- Make hotkey mapping actually useful
+- Signed build audit log
+- Self‑extracting installer with signature checking for updates.
+
+### ⏳ Connectivity & UI
+- Bluetooth support
+- Learn Qt
+- Learn Windows GUI programming
+- Write host‑side app for Windows
+- Learn macOS GUI programming
+- Write host‑side app for macOS
+
+### ⏳ Secure features
+- Encrypted clipboard manager
+- Decoding of barcodes to send as keystrokes to a host
+- Encrypted password manager
+
+### ⏳ Long‑term vision
+- Plugin ecosystem
 
 
-TODO
-====
-- ~~forward all USB Hid devices to the conntected host~~
-- ~~drop root privs as soon as possible~~
-- ~~allow users to register hotkey handlers~~
-- ~~run usercode in a isolated sandbox vm~~
-- ~~cross compile for aarch64 with musl-cross~~
-- ~~use msgpack to communicate with the isolated vm~~
-- ~~write install and uninstall tasks~~
-- ~~create a systemd unit file~~
-- ~~USB hotplug support~~
-- make hotkey mapping usefull
-- learn QT
-- learn Windows GUI Programming
-- write host side app for Windows
-- learn macOS GUI Programmming
-- write host side app for macOS
-- implement a encrypted clipboard manager
-- implement a encrypted password manager
-- create a ecosystem for plugins which run on the host side and communicate with a sandboxed vm on the gadget side
+---
 
-LICENSE
-=======
+## License
 AGPL-3
