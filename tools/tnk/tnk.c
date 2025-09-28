@@ -6,15 +6,6 @@
 #include <grp.h>
 #include <libgen.h>
 #include <limits.h>
-#include <mruby.h>
-#include <mruby/array.h>
-#include <mruby/compile.h>
-#include <mruby/error.h>
-#include <mruby/hash.h>
-#include <mruby/msgpack.h>
-#include <mruby/presym.h>
-#include <mruby/string.h>
-#include <mruby/variable.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -26,6 +17,19 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <linux/keyboard.h>
+#include <mruby.h>
+#include <mruby/array.h>
+#include <mruby/compile.h>
+#include <mruby/error.h>
+#include <mruby/hash.h>
+#include <mruby/msgpack.h>
+#include <mruby/presym.h>
+#include <mruby/string.h>
+#include <mruby/variable.h>
+
+#ifdef MRB_NO_PRESYM
+#error "tnk cannot be build without presym"
+#endif
 
 static mrb_value
 resolve_tnk_path(mrb_state *mrb, const char *rel_path, int mode)
@@ -95,25 +99,22 @@ drop_privileges(mrb_state *mrb, const char *username)
     bufsize = 16384;
   }
 
-  struct RString *s = MRB_OBJ_ALLOC(mrb, MRB_TT_STRING, NULL);
-  s->as.heap.ptr = (char*)mrb_malloc(mrb, bufsize);
+  mrb_value buf = mrb_str_new_capa(mrb, bufsize);
 
-  while ((ret = getpwnam_r(username, &pwd, s->as.heap.ptr, bufsize, &result)) == ERANGE) {
-    bufsize *= 2;
-    s->as.heap.ptr = (char *)mrb_realloc(mrb, s->as.heap.ptr, bufsize);
+  while ((ret = getpwnam_r(username, &pwd, RSTRING_PTR(buf), RSTRING_CAPA(buf), &result)) == ERANGE) {
+    buf = mrb_str_resize(mrb, buf, RSTRING_CAPA(buf) * 2);
   }
-
-  if (ret != 0) {
-    errno = ret;
-    mrb_sys_fail(mrb, "getpwnam_r");
-  }
-  if (!result) {
-    mrb_raisef(mrb, E_RUNTIME_ERROR, "user '%S' not found", mrb_str_new_cstr(mrb, username));;
+  if (result == NULL) {
+    if (ret == 0) {
+      mrb_raisef(mrb, E_RUNTIME_ERROR, "user '%S' not found", mrb_str_new_cstr(mrb, username));
+    } else {
+      errno = ret;
+      mrb_sys_fail(mrb, "getpwnam_r");
+    }
   }
 
   target_uid = pwd.pw_uid;
   target_gid = pwd.pw_gid;
-
   if (nftw(RSTRING_CSTR(mrb, target_dir), chown_cb, 16, FTW_PHYS) != 0) {
     mrb_sys_fail(mrb, "nftw");
   }
@@ -131,7 +132,7 @@ drop_privileges(mrb_state *mrb, const char *username)
 
 static unsigned short plain_map[NR_KEYS];
 
-static void
+static bool
 parse_plain_map_stream(FILE *fp)
 {
   char buf[4096];
@@ -166,12 +167,10 @@ parse_plain_map_stream(FILE *fp)
     }
   }
 
-  if (idx != NR_KEYS) {
-    fprintf(stderr, "Warning: expected %d keys, got %d\n", NR_KEYS, idx);
-  }
+  return (idx == NR_KEYS);
 }
 
-static int char_to_scancode[UCHAR_MAX + 1];
+static int char_to_scancode[NR_KEYS];
 
 static void rebuild_char_lookup(void) {
     // Default to "not found"
@@ -225,7 +224,7 @@ gen_keymap(mrb_state *mrb, mrb_value self)
       else if (strcmp(name, "XKBOPTIONS") == 0) target = &xkboptions;
 
       if (target) {
-        mrb_str_resize(mrb, *target, len);
+        *target = mrb_str_resize(mrb, *target, len);
         memcpy(RSTRING_PTR(*target), val, len);
       }
     }
@@ -320,8 +319,9 @@ gen_keymap(mrb_state *mrb, mrb_value self)
   FILE *fp = fdopen(pipefd[0], "r");
   if (!fp) mrb_sys_fail(mrb, "fdopen(pipefd[0], r)");
 
-  parse_plain_map_stream(fp);
+  bool parse_plain_success = parse_plain_map_stream(fp);
   fclose(fp);
+  if (!parse_plain_success) { mrb_raise(mrb, E_RUNTIME_ERROR, "invalid keymap"); }
 
   int status;
   waitpid(pid, &status, 0);
@@ -485,7 +485,7 @@ mrb_generate_hid_report(mrb_state *mrb, mrb_value self)
       if (!utf8_next_cp(s, len, &cp))
         mrb_raise(mrb, E_ARGUMENT_ERROR, "invalid UTF-8 sequence");
 
-      int sc = char_to_scancode[(unsigned char)cp]; // O(1) lookup
+      int sc = char_to_scancode[(unsigned char)cp];
       if (sc < 0)
         mrb_raise(mrb, E_ARGUMENT_ERROR, "character not in keymap");
 
@@ -511,19 +511,16 @@ mrb_totally_normal_keyboard_user_init(mrb_state *user_mrb)
 #ifdef MRB_DEBUG
   mrb_gv_set(user_mrb, MRB_GVSYM(DEBUG), mrb_true_value());
 #endif
-  struct RClass *tnk = mrb_define_class_id(user_mrb, MRB_SYM(Tnk), user_mrb->object_class);
-  struct RClass *hotkeys = mrb_define_module_under_id(user_mrb, tnk, MRB_SYM(Hotkeys));
-  mrb_define_module_function_id(user_mrb, hotkeys, MRB_SYM(generate_hid_report),
+  struct RClass *tnk = mrb_define_class_id(user_mrb, MRB_SYM_2(user_mrb, Tnk), user_mrb->object_class);
+  struct RClass *hotkeys = mrb_define_module_under_id(user_mrb, tnk, MRB_SYM_2(user_mrb, Hotkeys));
+  mrb_define_module_function_id(user_mrb, hotkeys, MRB_SYM_2(user_mbr, generate_hid_report),
                                 mrb_generate_hid_report, MRB_ARGS_ANY());
-  if (user_mrb->exc) {
-    mrb_print_error(user_mrb);
-    mrb_clear_error(user_mrb);
-    return false;
-  }
-  return true;
+  return !user_mrb->exc;
 }
 
-static bool mrb_tnk_load_hotkeys(mrb_state *user_mrb) {
+static bool
+mrb_tnk_load_hotkeys(mrb_state *user_mrb)
+{
   static const char hotkeys_rb[] = "class Tnk\n"
                                    "  module Hotkeys\n"
                                    "    @@hotkeys = {}\n"
@@ -535,12 +532,7 @@ static bool mrb_tnk_load_hotkeys(mrb_state *user_mrb) {
                                    "  end\n"
                                    "end\n";
   mrb_load_nstring(user_mrb, hotkeys_rb, sizeof(hotkeys_rb) - 1);
-  if (user_mrb->exc) {
-    mrb_print_error(user_mrb);
-    mrb_clear_error(user_mrb);
-    return false;
-  }
-  return true;
+  return !user_mrb->exc;
 }
 
 static mrb_state *
@@ -563,8 +555,8 @@ mrb_tnk_user_mrb_init(mrb_state *mrb)
   return user_mrb;
 }
 
-static mrb_value tnk_yield_block_protected(mrb_state *vm, void *userdata) {
-  return mrb_yield_argv(vm, *(mrb_value *)userdata, 0, NULL);
+static mrb_value tnk_yield_block_protected(mrb_state *vm, void *block) {
+  return mrb_yield_argv(vm, *(mrb_value *)block, 0, NULL);
 }
 
 static mrb_value
@@ -575,9 +567,9 @@ tnk_handle_hid_report_bridge(mrb_state *mrb, mrb_value self)
 
   mrb_state *user_mrb = (mrb_state *)mrb->ud;
 
-  struct RClass *tnk_h      = mrb_class_get_id(user_mrb, MRB_SYM(Tnk));
-  struct RClass *hotkeys_h  = mrb_module_get_under_id(user_mrb, tnk_h, MRB_SYM(Hotkeys));
-  mrb_value hotkeys_hash    = mrb_cv_get(user_mrb, mrb_obj_value(hotkeys_h), MRB_CVSYM(hotkeys));
+  struct RClass *tnk_h      = mrb_class_get_id(user_mrb, MRB_SYM_2(user_mrb, Tnk));
+  struct RClass *hotkeys_h  = mrb_module_get_under_id(user_mrb, tnk_h, MRB_SYM_2(user_mrb, Hotkeys));
+  mrb_value hotkeys_hash    = mrb_cv_get(user_mrb, mrb_obj_value(hotkeys_h), MRB_CVSYM_2(user_mrb, hotkeys));
   if (!mrb_hash_p(hotkeys_hash)) {
     mrb_raise(mrb, E_TYPE_ERROR, "not a hash");
   }
@@ -595,6 +587,7 @@ tnk_handle_hid_report_bridge(mrb_state *mrb, mrb_value self)
     mrb_print_error(user_mrb);
     mrb_clear_error(user_mrb);
     mrb_gc_arena_restore(user_mrb, 0);
+    mrb_raise(mrb, E_RUNTIME_ERROR, "user mode vm error");
     return mrb_false_value();
   }
 
@@ -603,7 +596,9 @@ tnk_handle_hid_report_bridge(mrb_state *mrb, mrb_value self)
   return ret;
 }
 
-static void block_signals(sigset_t *mask) {
+static void
+block_signals(sigset_t *mask)
+{
   sigemptyset(mask);
   sigaddset(mask, SIGINT);
   sigaddset(mask, SIGTERM);
@@ -614,7 +609,8 @@ static void block_signals(sigset_t *mask) {
   }
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char *argv[])
+{
   sigset_t mask;
   block_signals(&mask);
 
@@ -633,7 +629,9 @@ int main(int argc, char **argv) {
   }
   mrb_value argv_ary = mrb_ary_new_capa(mrb, argc);
   for (int i = 0; i < argc; i++) {
-    mrb_ary_push(mrb, argv_ary, mrb_str_new_cstr(mrb, argv[i]));
+    mrb_value arg_str = mrb_str_new_static(mrb, argv[i], strlen(argv[i]));
+    mrb_obj_freeze(mrb, arg_str);
+    mrb_ary_push(mrb, argv_ary, arg_str);
   }
   mrb_obj_freeze(mrb, argv_ary);
   mrb_define_const_id(mrb, mrb->object_class, MRB_SYM(ARGV), argv_ary);
@@ -739,6 +737,7 @@ int main(int argc, char **argv) {
     if (res != sizeof(si)) {
       if (errno == EINTR) continue;
       perror("read signalfd");
+      exit_code = 1;
       break;
     }
 
