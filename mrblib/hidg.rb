@@ -18,9 +18,9 @@ class Tnk
         end
       end
 
-      sh "modprobe -r dwc2"
-      sh "modprobe dwc2"
-      sh "modprobe libcomposite"
+      sh_silent "modprobe -r dwc2"
+      sh_silent "modprobe dwc2"
+      sh_silent "modprobe libcomposite"
       mkdir_p(GADGET)
       Dir.chdir(GADGET) do
         file_write("idVendor",     "0x1d6b")

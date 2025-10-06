@@ -2,7 +2,7 @@
 mruby:
   version: 3.4.0
   release_no: 30400
-  git_commit: 531823546b407cc7d2f7d6e18fb08992428cf668
+  git_commit: c54d5abdaf64f5dd8d6ba4d1a6cfd094994f7018
 builds:
   debug:
     https://github.com/Asmod4n/mruby-io_uring.git:
