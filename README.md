@@ -130,42 +130,5 @@ The app will restart itself automatically.
 
 ---
 
-## TODO
-
-### ✅ Foundations (done)
-- Forward all USB HID devices
-- Drop root privileges ASAP
-- User‑registerable hotkey handlers
-- Sandbox user code in a VM
-- Cross‑compile for aarch64 from other archs
-- Msgpack communication with sandboxed VM
-- Install/uninstall tasks
-- Systemd unit file
-- USB hotplug support
-
-### ⏳ Next up: usability & trust
-- Make hotkey mapping actually useful
-- Signed build audit log
-- Self‑extracting installer with signature checking for updates.
-
-### ⏳ Connectivity & UI
-- Bluetooth support
-- Learn Qt
-- Learn Windows GUI programming
-- Write host‑side app for Windows
-- Learn macOS GUI programming
-- Write host‑side app for macOS
-
-### ⏳ Secure features
-- Encrypted clipboard manager
-- Decoding of barcodes to send as keystrokes to a host
-- Encrypted password manager
-
-### ⏳ Long‑term vision
-- Plugin ecosystem
-
-
----
-
 ## License
 AGPL-3
