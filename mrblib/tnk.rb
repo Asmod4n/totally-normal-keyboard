@@ -1,10 +1,17 @@
 class Tnk
+  ENTER_USAGE = 0x28
+
   def initialize
     @hidraw_to_hidg = {}
     @empty_report = {}
     @event_devices = {}
     @needs_report_id_prefix = {}
     @report_length = {}
+    @mode = :passthrough
+    @recording_id = nil
+    @recording_buf = nil
+    @passphrase_buf = nil
+    @passphrase_offset = 0
   end
 
   def setup_root
@@ -25,18 +32,27 @@ class Tnk
 
   def setup_user
     Tnk.gen_keymap
+    open_vault
     @io_uring = IO::Uring.new
     hid_proc = Proc.new do |hidraw, hidg|
       @io_uring.prep_read_fixed(hidraw) do |read_op|
-        debug_puts Hotkeys.handle_hid_report(read_op.buf)
-        len = @report_length[hidraw]
         buf = read_op.buf
-        if buf.bytesize < len
-          @io_uring.prep_write(hidg, buf + "\x00" * (len - buf.bytesize), 0)
-          @io_uring.return_used_buffer(read_op)
+        raw = Hotkeys.handle_hid_report(buf)
+        debug_puts raw unless raw.nil?
+        forward = handle_report(hidraw, hidg, buf, hotkey_command(raw))
+
+        if forward
+          len = @report_length[hidraw]
+          if buf.bytesize < len
+            @io_uring.prep_write(hidg, buf + "\x00" * (len - buf.bytesize), 0)
+            @io_uring.return_used_buffer(read_op)
+          else
+            @io_uring.prep_write_fixed(hidg, read_op) { |op| @io_uring.return_used_buffer(op) }
+          end
         else
-          @io_uring.prep_write_fixed(hidg, read_op) { |op| @io_uring.return_used_buffer(op) }
+          @io_uring.return_used_buffer(read_op)
         end
+
         hid_proc.call(hidraw, hidg)
       end
     end
@@ -75,6 +91,7 @@ class Tnk
   end
 
   def close
+    Vault.close
     @hidraw_to_hidg.each do |hidraw_file, hidg_file|
       3.times { hidg_file.write(@empty_report[hidraw_file]) }
       hidraw_file.close
@@ -83,5 +100,124 @@ class Tnk
 
     @event_devices.each_value(&:close)
     Hidg.stop
+  end
+
+  private
+
+  def open_vault
+    exe_path = File.realpath("/proc/self/exe")
+    base_dir = File.realpath(File.dirname(exe_path))
+    share_dir = File.realpath(File.join(base_dir, "../share/totally-normal-keyboard"))
+    Vault.open(share_dir)
+  rescue => e
+    debug_puts "⚠️  Vault unavailable: #{e.message}"
+  end
+
+  # Sandbox return values only ever cross the CBOR boundary as plain data,
+  # so this is a schema check, not a security boundary in itself - but it
+  # keeps a malformed/unrelated return value (e.g. a hotkey that just
+  # returns a String for logging, like share/user.rb's demo) from ever
+  # being misread as a vault command.
+  def hotkey_command(cmd)
+    return nil unless cmd.is_a?(Array) && cmd[0].is_a?(Symbol)
+    case cmd[0]
+    when :start_recording, :end_recording, :replay
+      cmd.size == 2 && cmd[1].is_a?(Integer) ? cmd : nil
+    when :unlock, :lock
+      cmd.size == 1 ? cmd : nil
+    else
+      nil
+    end
+  end
+
+  # Returns true if `buf` should be forwarded to the host as usual.
+  # Recording and unlock-input both suppress forwarding entirely while
+  # active, including the report that ends the mode - nothing typed
+  # while capturing a secret should ever reach the host.
+  def handle_report(hidraw, hidg, buf, cmd)
+    case @mode
+    when :recording
+      if cmd == [:end_recording, @recording_id]
+        Vault.store_macro(@recording_id, @recording_buf)
+        @mode = :passthrough
+        @recording_id = nil
+        @recording_buf = nil
+      else
+        @recording_buf << buf.dup
+      end
+      false
+
+    when :unlock_input
+      if enter_pressed?(buf)
+        ok = Vault.unlock(@passphrase_buf)
+        debug_puts(ok ? "🔓 vault unlocked" : "🔒 wrong passphrase")
+        @mode = :passthrough
+        @passphrase_buf = nil
+        @passphrase_offset = 0
+      else
+        append_passphrase_report(buf)
+      end
+      false
+
+    else
+      if cmd
+        case cmd[0]
+        when :start_recording
+          @mode = :recording
+          @recording_id = cmd[1]
+          @recording_buf = []
+        when :unlock
+          @mode = :unlock_input
+          @passphrase_buf = "\x00" * Vault::PASSPHRASE_BYTES
+          @passphrase_offset = 0
+        when :replay
+          replay_macro(hidraw, hidg, cmd[1])
+        when :lock
+          Vault.lock
+        end
+      end
+      true
+    end
+  end
+
+  def enter_pressed?(buf)
+    i = 2
+    while i < buf.bytesize
+      return true if buf.getbyte(i) == ENTER_USAGE
+      i += 1
+    end
+    false
+  end
+
+  # Fixed 8-byte-per-report write into the pre-sized passphrase buffer -
+  # never grows it, so its backing storage never reallocates/moves and
+  # secure_wipe_memory always wipes the right memory later. Extra
+  # keystrokes past PASSPHRASE_BYTES are dropped, not appended.
+  def append_passphrase_report(buf)
+    return if @passphrase_offset >= Vault::PASSPHRASE_BYTES
+    8.times { |i| @passphrase_buf.setbyte(@passphrase_offset + i, buf.getbyte(i) || 0) }
+    @passphrase_offset += 8
+  ensure
+    secure_wipe_memory(buf)
+  end
+
+  def replay_macro(hidraw, hidg, id)
+    reports = Vault.load_macro(id)
+    return unless reports
+
+    len = @report_length[hidraw]
+    write_next = nil
+    write_next = Proc.new do |remaining|
+      unless remaining.empty?
+        report = remaining[0]
+        padded = report.bytesize < len ? report + "\x00" * (len - report.bytesize) : report
+        @io_uring.prep_write(hidg, padded, 0) do
+          write_next.call(remaining[1..-1])
+        end
+      end
+    end
+    write_next.call(reports)
+  rescue VaultError => e
+    debug_puts "⚠️  replay failed: #{e.message}"
   end
 end
