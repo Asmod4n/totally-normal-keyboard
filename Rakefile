@@ -44,7 +44,7 @@ task :install => :compile do
   sharedir = File.join(PREFIX, 'share', 'totally-normal-keyboard')
   FileUtils.mkdir_p(bindir)
   FileUtils.mkdir_p(sharedir)
-  release_bin = File.join('mruby', 'build', 'release', 'bin', 'tnk')
+  release_bin = File.join('mruby', 'build', 'host', 'bin', 'tnk')
   debug_bin   = File.join('mruby', 'build', 'debug', 'bin', 'tnk')
   FileUtils.install(release_bin, File.join(bindir, 'tnk'), mode: 0755) if File.exist?(release_bin)
   FileUtils.install(debug_bin,   File.join(bindir, 'tnk-debug'), mode: 0755) if File.exist?(debug_bin)

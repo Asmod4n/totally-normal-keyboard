@@ -38,7 +38,7 @@ class Tnk
         file_write("configs/c.1/MaxPower", "250")
 
         mkdir_p("functions/mass_storage.usb0")
-        exe_path = File.realpath(ARGV.first)
+        exe_path = File.realpath("/proc/self/exe")
         base_dir = File.realpath(File.dirname(exe_path))
         share_dir = File.realpath(File.join(base_dir, "../share/totally-normal-keyboard"))
 
@@ -181,7 +181,13 @@ class Tnk
           next if entry == "." || entry == ".."
           next unless entry.start_with?("hidraw")
           path = "#{base}/#{entry}/device/report_descriptor"
-          yield path if File.exist?(path)
+          next unless File.exist?(path)
+          unless Tnk::DeviceFilter.forward?(path)
+            debug_puts "⛔ #{Tnk::DeviceFilter.describe(path)}"
+            next
+          end
+          debug_puts "✅ #{Tnk::DeviceFilter.describe(path)}"
+          yield path
         end
       end
     end

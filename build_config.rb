@@ -5,26 +5,31 @@ host_cpu = RbConfig::CONFIG['host_cpu']
 host_os  = RbConfig::CONFIG['host_os']
 
 if host_cpu == 'aarch64' && host_os =~ /linux/i
-  MRuby::Build.new('debug') do |conf|
-    conf.toolchain :gcc
-    conf.enable_debug
-    conf.gembox 'full-core'
-    conf.enable_sanitizer "address,undefined,leak"
-    conf.cc.flags  << '-Og' << '-g' << '-fno-omit-frame-pointer'
-    conf.cxx.flags << '-Og' << '-g' << '-std=c++20' << '-fno-omit-frame-pointer'
-    conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
-    conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
-    conf.gem File.expand_path(File.dirname(__FILE__))
+  if ENV["TNK_DEBUG"]
+    MRuby::Build.new('debug') do |conf|
+      conf.toolchain :clang
+      conf.enable_debug
+      conf.gembox 'full-core'
+      conf.enable_sanitizer "address,undefined,leak"
+      conf.cc.flags  << '-Og' << '-g' << '-fno-omit-frame-pointer'
+      conf.cxx.flags << '-Og' << '-g' << '-std=c++20' << '-fno-omit-frame-pointer'
+      conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
+      conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
+      conf.gem File.expand_path(File.dirname(__FILE__))
+    end
   end
 
-  MRuby::Build.new('release') do |conf|
-    conf.toolchain :gcc
+  MRuby::Build.new do |conf|
+    conf.toolchain :clang
     conf.gembox 'full-core'
-    conf.cc.flags  << '-Os' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
-    conf.cxx.flags << '-Os' << '-std=c++20' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
+    conf.cc.flags  << '-Os' << '-ffunction-sections' << '-fdata-sections'
+    conf.cxx.flags << '-Os' << '-std=c++20' << '-ffunction-sections' << '-fdata-sections'
     conf.cc.flags  << '-g0'
     conf.cxx.flags << '-g0'
     conf.linker.flags << '-Wl,--strip-debug'
+    conf.linker.flags << '-static'
+    conf.cc.flags     << '-static'
+    conf.cxx.flags    << '-static'
     conf.cc.defines  << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.cxx.defines << %Q{TNK_PREFIX=\\"#{prefix}\\"}
     conf.gem File.expand_path(File.dirname(__FILE__))
@@ -43,8 +48,8 @@ else
     conf.cxx.command    = File.join(toolchain_bin_path, "#{TOOLCHAIN_TARGET}-g++")
     conf.linker.command = conf.cxx.command
 
-    conf.cc.flags  << '-Os' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
-    conf.cxx.flags << '-Os' << '-std=c++2a' << '-flto=auto' << '-ffunction-sections' << '-fdata-sections'
+    conf.cc.flags  << '-Os' << '-ffunction-sections' << '-fdata-sections'
+    conf.cxx.flags << '-Os' << '-std=c++2a' << '-ffunction-sections' << '-fdata-sections'
 
     conf.linker.flags << "-static"
     conf.cc.flags     << "-static"

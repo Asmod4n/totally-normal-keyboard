@@ -22,7 +22,7 @@
 #include <mruby/compile.h>
 #include <mruby/error.h>
 #include <mruby/hash.h>
-#include <mruby/msgpack.h>
+#include <mruby/cbor.h>
 #include <mruby/presym.h>
 #include <mruby/string.h>
 #include <mruby/variable.h>
@@ -415,7 +415,7 @@ mrb_generate_hid_report(mrb_state *mrb, mrb_value self)
   uint8_t modifier = 0;
   int key_slot = 0;
 
-  for (int i = 0; i < argc && key_slot < 6; i++) {
+  for (mrb_int i = 0; i < argc && key_slot < 6; i++) {
     if (mrb_symbol_p(argv[i])) {
       switch (mrb_symbol(argv[i])) {
         /* Modifiers */
@@ -543,6 +543,11 @@ mrb_tnk_user_mrb_init(mrb_state *mrb)
     perror("mrb_open_core()");
     return NULL;
   }
+  if (user_mrb->exc) {
+    mrb_print_error(user_mrb);
+    mrb_close(user_mrb);
+    return NULL;
+  }
   if (!mrb_totally_normal_keyboard_user_init(user_mrb)) {
     mrb_close(user_mrb);
     return NULL;
@@ -591,7 +596,7 @@ tnk_handle_hid_report_bridge(mrb_state *mrb, mrb_value self)
     return mrb_false_value();
   }
 
-  ret = mrb_msgpack_unpack(mrb, mrb_msgpack_pack(user_mrb, ret));
+  ret = mrb_cbor_decode_fast(mrb, mrb_cbor_encode_fast(user_mrb, ret));
   mrb_gc_arena_restore(user_mrb, 0);
   return ret;
 }
@@ -609,7 +614,7 @@ block_signals(sigset_t *mask)
   }
 }
 
-int main(int argc, char *argv[])
+int main(const int argc, const char * const argv[])
 {
   sigset_t mask;
   block_signals(&mask);
@@ -627,10 +632,15 @@ int main(int argc, char *argv[])
     perror("mrb_open()");
     return 1;
   }
+  if (mrb->exc) {
+    close(sfd);
+    mrb_print_error(mrb);
+    mrb_close(mrb);
+    return 1;
+  }
   mrb_value argv_ary = mrb_ary_new_capa(mrb, argc);
   for (int i = 0; i < argc; i++) {
-    mrb_value arg_str = mrb_str_new_static(mrb, argv[i], strlen(argv[i]));
-    mrb_obj_freeze(mrb, arg_str);
+    mrb_value arg_str = mrb_str_new_static_frozen(mrb, argv[i], strlen(argv[i]));
     mrb_ary_push(mrb, argv_ary, arg_str);
   }
   mrb_obj_freeze(mrb, argv_ary);
