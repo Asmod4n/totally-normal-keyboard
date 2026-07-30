@@ -7,6 +7,10 @@ class Tnk
     @event_devices = {}
     @needs_report_id_prefix = {}
     @report_length = {}
+    @is_boot_keyboard = {}
+    @hidg_path = {}
+    @hidg_by_path = {}
+    @report_length_by_path = {}
     @mode = :passthrough
     @recording_id = nil
     @recording_buf = nil
@@ -27,6 +31,10 @@ class Tnk
       desc = "/sys/class/hidraw/#{File.basename(hidraw_path)}/device/report_descriptor"
       _page, _usage, has_ids = DeviceFilter.inspect_descriptor(desc)
       @needs_report_id_prefix[hidraw_file] = !has_ids
+      @is_boot_keyboard[hidraw_file] = DeviceFilter.boot_keyboard?(desc)
+      @hidg_path[hidg_file] = hidg_path
+      @hidg_by_path[hidg_path] = hidg_file
+      @report_length_by_path[hidg_path] = len
     end
   end
 
@@ -131,9 +139,12 @@ class Tnk
   end
 
   # Returns true if `buf` should be forwarded to the host as usual.
-  # Recording and unlock-input both suppress forwarding entirely while
-  # active, including the report that ends the mode - nothing typed
-  # while capturing a secret should ever reach the host.
+  # Recording spans every connected device at once (so a mouse dragged
+  # mid-recording ends up in the same macro as the keystrokes around it)
+  # and suppresses forwarding for all of them while active, including the
+  # report that ends the mode. Unlock-input is scoped to the boot keyboard
+  # only - anything else (e.g. a connected mouse) keeps forwarding
+  # normally, since it's neither part of a passphrase nor a secret.
   def handle_report(hidraw, hidg, buf, cmd)
     case @mode
     when :recording
@@ -143,21 +154,25 @@ class Tnk
         @recording_id = nil
         @recording_buf = nil
       else
-        @recording_buf << buf.dup
+        @recording_buf << [@hidg_path[hidg], buf.dup]
       end
       false
 
     when :unlock_input
-      if enter_pressed?(buf)
-        ok = Vault.unlock(@passphrase_buf)
-        debug_puts(ok ? "🔓 vault unlocked" : "🔒 wrong passphrase")
-        @mode = :passthrough
-        @passphrase_buf = nil
-        @passphrase_offset = 0
+      if @is_boot_keyboard[hidraw]
+        if enter_pressed?(buf)
+          ok = Vault.unlock(@passphrase_buf)
+          debug_puts(ok ? "🔓 vault unlocked" : "🔒 wrong passphrase")
+          @mode = :passthrough
+          @passphrase_buf = nil
+          @passphrase_offset = 0
+        else
+          append_passphrase_report(buf)
+        end
+        false
       else
-        append_passphrase_report(buf)
+        true
       end
-      false
 
     else
       if cmd
@@ -171,7 +186,7 @@ class Tnk
           @passphrase_buf = "\x00" * Vault::PASSPHRASE_BYTES
           @passphrase_offset = 0
         when :replay
-          replay_macro(hidraw, hidg, cmd[1])
+          replay_macro(cmd[1])
         when :lock
           Vault.lock
         end
@@ -201,17 +216,27 @@ class Tnk
     secure_wipe_memory(buf)
   end
 
-  def replay_macro(hidraw, hidg, id)
+  # Each recorded entry is [hidg_path, report] - routes every report back
+  # to whichever device it was captured from, so a mixed keyboard+mouse
+  # macro replays correctly instead of writing everything to whichever
+  # device happened to trigger :replay. A device that's gone since the
+  # recording was made (unplugged) just has its reports skipped.
+  def replay_macro(id)
     reports = Vault.load_macro(id)
     return unless reports
 
-    len = @report_length[hidraw]
     write_next = nil
     write_next = Proc.new do |remaining|
       unless remaining.empty?
-        report = remaining[0]
+        path, report = remaining[0]
+        target = @hidg_by_path[path]
+        unless target
+          debug_puts "⚠️  replay: #{path.inspect} not connected, skipping report"
+          next write_next.call(remaining[1..-1])
+        end
+        len = @report_length_by_path[path]
         padded = report.bytesize < len ? report + "\x00" * (len - report.bytesize) : report
-        @io_uring.prep_write(hidg, padded, 0) do
+        @io_uring.prep_write(target, padded, 0) do
           write_next.call(remaining[1..-1])
         end
       end
