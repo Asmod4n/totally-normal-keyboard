@@ -8,9 +8,9 @@ class Tnk
     @needs_report_id_prefix = {}
     @report_length = {}
     @is_boot_keyboard = {}
-    @hidg_path = {}
-    @hidg_by_path = {}
-    @report_length_by_path = {}
+    @descriptor_by_hidraw = {}
+    @hidg_by_descriptor = {}
+    @report_length_by_descriptor = {}
     @mode = :passthrough
     @recording_id = nil
     @recording_buf = nil
@@ -32,9 +32,11 @@ class Tnk
       _page, _usage, has_ids = DeviceFilter.inspect_descriptor(desc)
       @needs_report_id_prefix[hidraw_file] = !has_ids
       @is_boot_keyboard[hidraw_file] = DeviceFilter.boot_keyboard?(desc)
-      @hidg_path[hidg_file] = hidg_path
-      @hidg_by_path[hidg_path] = hidg_file
-      @report_length_by_path[hidg_path] = len
+
+      descriptor = File.open(desc, 'rb') { |f| f.read }
+      @descriptor_by_hidraw[hidraw_file] = descriptor
+      @hidg_by_descriptor[descriptor] = hidg_file
+      @report_length_by_descriptor[descriptor] = len
     end
   end
 
@@ -154,7 +156,7 @@ class Tnk
         @recording_id = nil
         @recording_buf = nil
       else
-        @recording_buf << [@hidg_path[hidg], buf.dup]
+        @recording_buf << [@descriptor_by_hidraw[hidraw], buf.dup]
       end
       false
 
@@ -216,11 +218,12 @@ class Tnk
     secure_wipe_memory(buf)
   end
 
-  # Each recorded entry is [hidg_path, report] - routes every report back
-  # to whichever device it was captured from, so a mixed keyboard+mouse
-  # macro replays correctly instead of writing everything to whichever
-  # device happened to trigger :replay. A device that's gone since the
-  # recording was made (unplugged) just has its reports skipped.
+  # Each recorded entry is [descriptor, report] - routed by matching the
+  # exact descriptor bytes against whatever's currently connected, not by
+  # a fixed hidg path. That also survives the recorded device having been
+  # unplugged and replugged into a different port (new hid_index, same
+  # descriptor) between recording and replay. No match currently
+  # connected -> that report is skipped, not the whole replay.
   def replay_macro(id)
     reports = Vault.load_macro(id)
     return unless reports
@@ -228,13 +231,13 @@ class Tnk
     write_next = nil
     write_next = Proc.new do |remaining|
       unless remaining.empty?
-        path, report = remaining[0]
-        target = @hidg_by_path[path]
+        descriptor, report = remaining[0]
+        target = @hidg_by_descriptor[descriptor]
         unless target
-          debug_puts "⚠️  replay: #{path.inspect} not connected, skipping report"
+          debug_puts "⚠️  replay: no connected device matches this recording's descriptor, skipping report"
           next write_next.call(remaining[1..-1])
         end
-        len = @report_length_by_path[path]
+        len = @report_length_by_descriptor[descriptor]
         padded = report.bytesize < len ? report + "\x00" * (len - report.bytesize) : report
         @io_uring.prep_write(target, padded, 0) do
           write_next.call(remaining[1..-1])
