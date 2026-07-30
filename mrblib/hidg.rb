@@ -21,6 +21,13 @@ class Tnk
       sh_silent "modprobe -r dwc2"
       sh_silent "modprobe dwc2"
       sh_silent "modprobe libcomposite"
+
+      exe_path = File.realpath("/proc/self/exe")
+      base_dir = File.realpath(File.dirname(exe_path))
+      share_dir = File.realpath(File.join(base_dir, "../share/totally-normal-keyboard"))
+      mkdir_p(share_dir)
+      identity = Tnk::Identity.load_or_create(share_dir)
+
       mkdir_p(GADGET)
       Dir.chdir(GADGET) do
         file_write("idVendor",     "0x1d6b")
@@ -29,7 +36,7 @@ class Tnk
         file_write("bcdUSB",       "0x0200")
 
         mkdir_p("strings/0x409")
-        file_write("strings/0x409/serialnumber",  "1234567890")
+        file_write("strings/0x409/serialnumber",  identity[:serial])
         file_write("strings/0x409/manufacturer",  "Hendrik")
         file_write("strings/0x409/product",       "Totally Normal Keyboard")
 
@@ -38,11 +45,6 @@ class Tnk
         file_write("configs/c.1/MaxPower", "250")
 
         mkdir_p("functions/mass_storage.usb0")
-        exe_path = File.realpath("/proc/self/exe")
-        base_dir = File.realpath(File.dirname(exe_path))
-        share_dir = File.realpath(File.join(base_dir, "../share/totally-normal-keyboard"))
-
-        mkdir_p(share_dir)
 
         disk_img = File.join(share_dir, "disk.img")
         unless File.exist?(disk_img)
@@ -58,8 +60,8 @@ class Tnk
         ln_s("functions/mass_storage.usb0", "configs/c.1/mass_storage.usb0")
 
         mkdir_p("functions/ncm.usb0")
-        file_write("functions/ncm.usb0/dev_addr", "02:12:34:56:78:90")
-        file_write("functions/ncm.usb0/host_addr", "02:98:76:54:32:10")
+        file_write("functions/ncm.usb0/dev_addr", identity[:dev_addr])
+        file_write("functions/ncm.usb0/host_addr", identity[:host_addr])
         ln_s("functions/ncm.usb0", "configs/c.1/ncm.usb0")
 
         debug_puts "🧠 Scanning for HID report descriptors..."
