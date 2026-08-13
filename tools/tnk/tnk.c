@@ -131,24 +131,50 @@ drop_privileges(mrb_state *mrb, const char *username)
 }
 
 static unsigned short plain_map[NR_KEYS];
+static unsigned short shift_map[NR_KEYS];
 
+typedef struct {
+  const char *name;
+  unsigned short *dest;
+  int idx;
+  bool complete;
+} map_target_t;
+
+/*
+ * loadkeys -u --mktable writes several `unsigned short X_map[NR_KEYS] = {...};`
+ * blocks one after another into a single, non-seekable pipe. Scan for all of
+ * them in one pass instead of one parse per map.
+ */
 static bool
-parse_plain_map_stream(FILE *fp)
+parse_keymap_stream(FILE *fp)
 {
+  map_target_t targets[] = {
+    { "plain_map", plain_map, 0, false },
+    { "shift_map", shift_map, 0, false },
+  };
+  const int n_targets = (int)(sizeof(targets) / sizeof(targets[0]));
+
   char buf[4096];
-  int found = 0;
-  int idx = 0;
+  map_target_t *active = NULL;
 
   while (fgets(buf, sizeof(buf), fp)) {
-    if (!found) {
-      if (strstr(buf, "unsigned short plain_map[NR_KEYS] = {")) {
-        found = 1;
+    if (!active) {
+      for (int t = 0; t < n_targets; t++) {
+        if (targets[t].complete) continue;
+        char header[64];
+        snprintf(header, sizeof(header), "unsigned short %s[NR_KEYS] = {", targets[t].name);
+        if (strstr(buf, header)) {
+          active = &targets[t];
+          break;
+        }
       }
       continue;
     }
 
     if (strchr(buf, '}')) {
-      break;
+      active->complete = (active->idx == NR_KEYS);
+      active = NULL;
+      continue;
     }
 
     char *p = buf;
@@ -160,14 +186,17 @@ parse_plain_map_stream(FILE *fp)
 
       char *end;
       unsigned long val = strtoul(p, &end, 0);
-      if (p != end && idx < NR_KEYS) {
-        plain_map[idx++] = (unsigned short)val;
+      if (p != end && active->idx < NR_KEYS) {
+        active->dest[active->idx++] = (unsigned short)val;
       }
       p = end;
     }
   }
 
-  return (idx == NR_KEYS);
+  for (int t = 0; t < n_targets; t++) {
+    if (!targets[t].complete) return false;
+  }
+  return true;
 }
 
 static int char_to_scancode[NR_KEYS];
@@ -180,6 +209,64 @@ static void rebuild_char_lookup(void) {
         unsigned char ch = plain_map[i] & 0xFF;
         char_to_scancode[ch] = i;
     }
+}
+
+static const uint8_t scancode_to_hid[NR_KEYS] = {
+    [1] = 0x29,  [2] = 0x1E,  [3] = 0x1F,  [4] = 0x20,  [5] = 0x21,
+    [6] = 0x22,  [7] = 0x23,  [8] = 0x24,  [9] = 0x25,  [10] = 0x26,
+    [11] = 0x27, [12] = 0x2D, [13] = 0x2E, [14] = 0x2A, [15] = 0x2B,
+    [16] = 0x14, [17] = 0x1A, [18] = 0x08, [19] = 0x15, [20] = 0x17,
+    [21] = 0x1C, [22] = 0x18, [23] = 0x0C, [24] = 0x12, [25] = 0x13,
+    [26] = 0x2F, [27] = 0x30, [28] = 0x28, [29] = 0x04, [30] = 0x16,
+    [31] = 0x07, [32] = 0x09, [33] = 0x0A, [34] = 0x0B, [35] = 0x0D,
+    [36] = 0x0E, [37] = 0x0F, [38] = 0x33, [39] = 0x34, [40] = 0x35,
+    [41] = 0xE1, [42] = 0x1D, [43] = 0x1B, [44] = 0x06, [45] = 0x19,
+    [46] = 0x05, [47] = 0x11, [48] = 0x10, [49] = 0x36, [50] = 0x37,
+    [51] = 0x38, [52] = 0xE5, [53] = 0x55, [54] = 0xE0, [55] = 0x2C,
+    [56] = 0x39, [57] = 0x3A, [58] = 0x3B, [59] = 0x3C, [60] = 0x3D,
+    [61] = 0x3E, [62] = 0x3F, [63] = 0x40, [64] = 0x41, [65] = 0x42,
+    [66] = 0x43, [67] = 0x53, [68] = 0x47, [69] = 0x5F, [70] = 0x60,
+    [71] = 0x61, [72] = 0x56, [73] = 0x5C, [74] = 0x5D, [75] = 0x5E,
+    [76] = 0x57, [77] = 0x59, [78] = 0x5A, [79] = 0x5B, [80] = 0x62,
+    [81] = 0x63};
+
+static int hid_to_scancode[256];
+
+static void rebuild_hid_to_scancode_lookup(void) {
+    memset(hid_to_scancode, 0xFF, sizeof(hid_to_scancode));
+
+    for (int i = 0; i < NR_KEYS; i++) {
+        uint8_t hid = scancode_to_hid[i];
+        if (hid != 0x00) hid_to_scancode[hid] = i;
+    }
+}
+
+/*
+ * Reverse of the character -> HID direction: given a HID usage code (as
+ * seen in an incoming boot-keyboard report) and whether Shift is held,
+ * returns the character it types, or nil for anything that isn't a plain
+ * printable key (KT_LATIN) - non-Latin entries (Enter, cursor keys, dead
+ * keys, ...) are the caller's responsibility via the raw usage code.
+ */
+static mrb_value
+mrb_hid_to_char(mrb_state *mrb, mrb_value self)
+{
+  mrb_int usage;
+  mrb_bool shift = FALSE;
+  mrb_get_args(mrb, "i|b", &usage, &shift);
+
+  if (usage < 0 || usage > 0xFF) return mrb_nil_value();
+
+  int sc = hid_to_scancode[(uint8_t)usage];
+  if (sc < 0) return mrb_nil_value();
+
+  unsigned short entry = shift ? shift_map[sc] : plain_map[sc];
+  if (KTYP(entry) != KT_LATIN) return mrb_nil_value();
+
+  unsigned char ch = (unsigned char) KVAL(entry);
+  if (ch == 0) return mrb_nil_value();
+
+  return mrb_str_new(mrb, (const char *)&ch, 1);
 }
 
 static mrb_value
@@ -319,9 +406,9 @@ gen_keymap(mrb_state *mrb, mrb_value self)
   FILE *fp = fdopen(pipefd[0], "r");
   if (!fp) mrb_sys_fail(mrb, "fdopen(pipefd[0], r)");
 
-  bool parse_plain_success = parse_plain_map_stream(fp);
+  bool parse_success = parse_keymap_stream(fp);
   fclose(fp);
-  if (!parse_plain_success) { mrb_raise(mrb, E_RUNTIME_ERROR, "invalid keymap"); }
+  if (!parse_success) { mrb_raise(mrb, E_RUNTIME_ERROR, "invalid keymap"); }
 
   int status;
   waitpid(pid, &status, 0);
@@ -331,6 +418,7 @@ gen_keymap(mrb_state *mrb, mrb_value self)
   }
 
   rebuild_char_lookup();
+  rebuild_hid_to_scancode_lookup();
   return mrb_true_value();
 }
 
@@ -384,25 +472,6 @@ utf8_next_cp(const char *s, size_t len, uint32_t *cp)
 
   return false; // invalid leading byte
 }
-
-static const uint8_t scancode_to_hid[NR_KEYS] = {
-    [1] = 0x29,  [2] = 0x1E,  [3] = 0x1F,  [4] = 0x20,  [5] = 0x21,
-    [6] = 0x22,  [7] = 0x23,  [8] = 0x24,  [9] = 0x25,  [10] = 0x26,
-    [11] = 0x27, [12] = 0x2D, [13] = 0x2E, [14] = 0x2A, [15] = 0x2B,
-    [16] = 0x14, [17] = 0x1A, [18] = 0x08, [19] = 0x15, [20] = 0x17,
-    [21] = 0x1C, [22] = 0x18, [23] = 0x0C, [24] = 0x12, [25] = 0x13,
-    [26] = 0x2F, [27] = 0x30, [28] = 0x28, [29] = 0x04, [30] = 0x16,
-    [31] = 0x07, [32] = 0x09, [33] = 0x0A, [34] = 0x0B, [35] = 0x0D,
-    [36] = 0x0E, [37] = 0x0F, [38] = 0x33, [39] = 0x34, [40] = 0x35,
-    [41] = 0xE1, [42] = 0x1D, [43] = 0x1B, [44] = 0x06, [45] = 0x19,
-    [46] = 0x05, [47] = 0x11, [48] = 0x10, [49] = 0x36, [50] = 0x37,
-    [51] = 0x38, [52] = 0xE5, [53] = 0x55, [54] = 0xE0, [55] = 0x2C,
-    [56] = 0x39, [57] = 0x3A, [58] = 0x3B, [59] = 0x3C, [60] = 0x3D,
-    [61] = 0x3E, [62] = 0x3F, [63] = 0x40, [64] = 0x41, [65] = 0x42,
-    [66] = 0x43, [67] = 0x53, [68] = 0x47, [69] = 0x5F, [70] = 0x60,
-    [71] = 0x61, [72] = 0x56, [73] = 0x5C, [74] = 0x5D, [75] = 0x5E,
-    [76] = 0x57, [77] = 0x59, [78] = 0x5A, [79] = 0x5B, [80] = 0x62,
-    [81] = 0x63};
 
 static mrb_value
 mrb_generate_hid_report(mrb_state *mrb, mrb_value self)
@@ -686,6 +755,8 @@ int main(const int argc, const char * const argv[])
                                   MRB_ARGS_REQ(1));
     mrb_define_module_function_id(mrb, tnk_cls, MRB_SYM(gen_keymap), gen_keymap,
                                   MRB_ARGS_NONE());
+    mrb_define_module_function_id(mrb, tnk_cls, MRB_SYM(hid_to_char), mrb_hid_to_char,
+                                  MRB_ARGS_ARG(1, 1));
     mrb_funcall_id(mrb, tnk, MRB_SYM(setup_user), 0);
     if (mrb->exc) {
       rc = 1;

@@ -21,6 +21,13 @@ class Tnk
       sh_silent "modprobe -r dwc2"
       sh_silent "modprobe dwc2"
       sh_silent "modprobe libcomposite"
+
+      exe_path = File.realpath("/proc/self/exe")
+      base_dir = File.realpath(File.dirname(exe_path))
+      share_dir = File.realpath(File.join(base_dir, "../share/totally-normal-keyboard"))
+      mkdir_p(share_dir)
+      identity = Tnk::Identity.load_or_create(share_dir)
+
       mkdir_p(GADGET)
       Dir.chdir(GADGET) do
         file_write("idVendor",     "0x1d6b")
@@ -29,7 +36,7 @@ class Tnk
         file_write("bcdUSB",       "0x0200")
 
         mkdir_p("strings/0x409")
-        file_write("strings/0x409/serialnumber",  "1234567890")
+        file_write("strings/0x409/serialnumber",  identity[:serial])
         file_write("strings/0x409/manufacturer",  "Hendrik")
         file_write("strings/0x409/product",       "Totally Normal Keyboard")
 
@@ -38,16 +45,12 @@ class Tnk
         file_write("configs/c.1/MaxPower", "250")
 
         mkdir_p("functions/mass_storage.usb0")
-        exe_path = File.realpath("/proc/self/exe")
-        base_dir = File.realpath(File.dirname(exe_path))
-        share_dir = File.realpath(File.join(base_dir, "../share/totally-normal-keyboard"))
-
-        mkdir_p(share_dir)
 
         disk_img = File.join(share_dir, "disk.img")
         unless File.exist?(disk_img)
-          debug_puts "📦 Creating disk.img..."
-          sh "dd if=/dev/zero of=#{disk_img} bs=128M count=1"
+          bytes = half_of_available(share_dir)
+          debug_puts "📦 Creating disk.img (#{bytes / 1048576} MiB)..."
+          sh "truncate -s #{bytes} #{disk_img}"
           sh "mkfs.vfat #{disk_img}"
         else
           debug_puts "✅ disk.img exists – skipping creation."
@@ -58,8 +61,8 @@ class Tnk
         ln_s("functions/mass_storage.usb0", "configs/c.1/mass_storage.usb0")
 
         mkdir_p("functions/ncm.usb0")
-        file_write("functions/ncm.usb0/dev_addr", "02:12:34:56:78:90")
-        file_write("functions/ncm.usb0/host_addr", "02:98:76:54:32:10")
+        file_write("functions/ncm.usb0/dev_addr", identity[:dev_addr])
+        file_write("functions/ncm.usb0/host_addr", identity[:host_addr])
         ln_s("functions/ncm.usb0", "configs/c.1/ncm.usb0")
 
         debug_puts "🧠 Scanning for HID report descriptors..."
@@ -172,6 +175,37 @@ class Tnk
 
     def sh_capture(cmd)
       IO.popen(cmd) { |io| io.read }.chomp
+    end
+
+    # Half the free space on the volume the image sits on, in bytes.
+    #
+    # truncate(1) is ftruncate(2) with a name on it: it sets the length
+    # and writes nothing, so the image is SPARSE and occupies only the
+    # blocks that end up holding data. The old `dd if=/dev/zero bs=128M
+    # count=1` wrote 128 MiB of actual zeroes to the card - slow, a whole
+    # card's worth of wear for an empty filesystem, and a size fixed at
+    # 128 MiB whatever the card was.
+    #
+    # So the number here is a CEILING the host is shown, not space taken
+    # from the Pi. Half rather than all of it because the host must not
+    # be able to fill the root filesystem by copying files onto what
+    # looks like a USB stick.
+    #
+    # df -Pk, not df --output=avail: -P is POSIX, one line per
+    # filesystem in fixed columns, and parses identically under the
+    # busybox df on a minimal Pi image, where --output does not exist.
+    # Column 4 is available 1024-byte blocks.
+    #
+    # Rounded down to a MiB so mkfs.vfat gets a whole number of clusters
+    # to work with. Note FAT32 tops out at 2 TiB and mkfs.vfat will
+    # refuse past that - not reachable on an SD card, but it is the limit
+    # if this ever runs somewhere with a real disk under it.
+    def half_of_available(dir)
+      line = sh_capture("df -Pk #{dir}").split("\n").last.to_s
+      avail_kb = line.split(" ")[3].to_i
+      raise GadgetError, "cannot read free space for #{dir}" if avail_kb <= 0
+      bytes = (avail_kb / 2) * 1024
+      bytes - (bytes % 1048576)
     end
 
     def each_hidraw_report_descriptor
